@@ -33,6 +33,7 @@ import json
 import gzip
 import argparse
 import logging
+import time
 from pathlib import Path
 from typing import List, Dict
 from dotenv import load_dotenv
@@ -58,6 +59,32 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Import from tgrag package (simplified API)
 from tgrag import create_temporal_graphrag_from_config
+
+
+def format_seconds(seconds: float) -> str:
+    """Format elapsed seconds for human-readable progress logs."""
+    return f"{seconds:.2f}s"
+
+
+class PhaseTimer:
+    """Small wall-clock timer for script-level build phases."""
+
+    def __init__(self) -> None:
+        self.total_start = time.perf_counter()
+        self.phase_start = self.total_start
+
+    def mark(self, label: str) -> None:
+        now = time.perf_counter()
+        phase_elapsed = now - self.phase_start
+        total_elapsed = now - self.total_start
+        print(
+            f"[timer] {label}: {format_seconds(phase_elapsed)} "
+            f"(total {format_seconds(total_elapsed)})"
+        )
+        self.phase_start = now
+
+    def total(self) -> float:
+        return time.perf_counter() - self.total_start
 
 
 def load_documents_from_corpus(corpus_path: Path, num_docs: int = 3) -> List[Dict]:
@@ -257,6 +284,7 @@ def prepare_documents_for_insertion(documents: List[Dict]) -> List[Dict]:
 
 def main():
     """Main function to build the graph."""
+    timer = PhaseTimer()
     parser = argparse.ArgumentParser(
         description="Build Temporal GraphRAG knowledge graph from documents (ECT-QA corpus, text files, or directories) using config.yaml",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -332,6 +360,7 @@ def main():
         print(f"   Chunk overlap: {graph_rag.chunk_overlap_token_size} tokens")
         print(f"   Entity summarization: {'Disabled' if graph_rag.disable_entity_summarization else 'Enabled'}")
         print(f"   Community summary: {'Enabled' if graph_rag.enable_community_summary else 'Disabled'}")
+        timer.mark("initialize TemporalGraphRAG")
     except ValueError as e:
         print(f"❌ Error: {e}")
         sys.exit(1)
@@ -373,6 +402,7 @@ def main():
         if not documents:
             print("❌ No documents loaded")
             sys.exit(1)
+        timer.mark(f"load documents ({len(documents)} docs)")
     except Exception as e:
         print(f"❌ Error loading documents: {e}")
         sys.exit(1)
@@ -380,6 +410,7 @@ def main():
     # Prepare documents (auto-detects format)
     prepared_docs = prepare_documents_for_insertion(documents)
     print(f"✅ Prepared {len(prepared_docs)} documents for insertion")
+    timer.mark(f"prepare documents ({len(prepared_docs)} docs)")
     
     # Insert documents
     print("\n" + "="*60)
@@ -390,8 +421,10 @@ def main():
     print()
     
     try:
+        print("[timer] build graph started")
         graph_rag.insert(prepared_docs)
         print("\n✅ Graph building completed successfully!")
+        timer.mark("insert documents and build graph")
     except Exception as e:
         print(f"\n❌ Error during graph building: {e}")
         import traceback
@@ -430,6 +463,7 @@ def main():
     print(f"✅ Graph stored in: {Path(graph_rag.working_dir).absolute()}")
     print(f"✅ Working directory: {graph_rag.working_dir}")
     print(f"✅ Configuration: {args.config}")
+    print(f"✅ Total elapsed: {format_seconds(timer.total())}")
     print("="*60)
 
 

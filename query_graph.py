@@ -29,6 +29,8 @@ import os
 import sys
 import argparse
 import logging
+import json
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -59,8 +61,35 @@ sys.path.insert(0, str(Path(__file__).parent))
 from tgrag import create_temporal_graphrag_from_config
 
 
+def format_seconds(seconds: float) -> str:
+    """Format elapsed seconds for human-readable progress logs."""
+    return f"{seconds:.2f}s"
+
+
+class PhaseTimer:
+    """Small wall-clock timer for script-level query phases."""
+
+    def __init__(self) -> None:
+        self.total_start = time.perf_counter()
+        self.phase_start = self.total_start
+
+    def mark(self, label: str) -> None:
+        now = time.perf_counter()
+        phase_elapsed = now - self.phase_start
+        total_elapsed = now - self.total_start
+        print(
+            f"[timer] {label}: {format_seconds(phase_elapsed)} "
+            f"(total {format_seconds(total_elapsed)})"
+        )
+        self.phase_start = now
+
+    def total(self) -> float:
+        return time.perf_counter() - self.total_start
+
+
 def main():
     """Main function to query the graph."""
+    timer = PhaseTimer()
     parser = argparse.ArgumentParser(
         description="Query Temporal GraphRAG knowledge graph using config.yaml",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -89,6 +118,11 @@ def main():
         choices=['local', 'global', 'naive'],
         default=None,
         help='Query mode: local, global, or naive (overrides config if specified)'
+    )
+    parser.add_argument(
+        '--show_retrieval',
+        action='store_true',
+        help='Print retrieval details when local mode returns them'
     )
     
     args = parser.parse_args()
@@ -122,6 +156,7 @@ def main():
             print(f"\n❌ Error: Working directory does not exist: {graph_rag.working_dir}")
             print("   Please make sure you've built the graph first using build_graph.py")
             sys.exit(1)
+        timer.mark("initialize TemporalGraphRAG")
         
     except ValueError as e:
         print(f"❌ Error: {e}")
@@ -148,16 +183,25 @@ def main():
     local_max_token_for_community_report = raw_config.get('local_max_token_for_community_report', 2000)
     global_max_token_for_community_report = raw_config.get('global_max_token_for_community_report', 16384)
     naive_max_token_for_text_unit = raw_config.get('naive_max_token_for_text_unit', 12000)
+    top_k = raw_config.get('top_k', 20)
+    enable_subgraph = raw_config.get('enable_subgraph', False)
+    enable_mixed_relationship = raw_config.get('enable_mixed_relationship', False)
+    seed_node_method = raw_config.get('seed_node_method', 'entities')
     
     # Create QueryParam with all settings
     query_param = QueryParam(
         mode=query_mode,
+        top_k=top_k,
+        seed_node_method=seed_node_method,
         local_max_token_for_text_unit=local_max_token_for_text_unit,
         local_max_token_for_local_context=local_max_token_for_local_context,
         local_max_token_for_community_report=local_max_token_for_community_report,
         global_max_token_for_community_report=global_max_token_for_community_report,
         naive_max_token_for_text_unit=naive_max_token_for_text_unit,
+        sub_graph=enable_subgraph,
+        mix_relation=enable_mixed_relationship,
     )
+    timer.mark("load query parameters")
     
     # Query the graph
     print("\n" + "="*60)
@@ -170,12 +214,23 @@ def main():
     print()
     
     try:
+        print("[timer] query started")
         response = graph_rag.query(args.question, param=query_param)
+        timer.mark("run query")
+        retrieval_detail = None
+        if isinstance(response, tuple) and len(response) == 2:
+            response, retrieval_detail = response
         print("="*60)
         print("RESPONSE")
         print("="*60)
         print(response)
+        if args.show_retrieval and retrieval_detail is not None:
+            print("="*60)
+            print("RETRIEVAL DETAIL")
+            print("="*60)
+            print(json.dumps(retrieval_detail, indent=2, ensure_ascii=False, default=str))
         print("="*60)
+        print(f"[timer] total: {format_seconds(timer.total())}")
     except Exception as e:
         print(f"\n❌ Error during query: {e}")
         import traceback
@@ -209,4 +264,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

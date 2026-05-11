@@ -11,6 +11,7 @@ google-genai>=0.2.0
 
 # Graph and network analysis
 networkx>=3.0
+scipy>=1.11.0
 
 # Vector database libraries
 nano-vectordb>=0.0.4.3

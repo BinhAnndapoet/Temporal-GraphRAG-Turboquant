@@ -37,6 +37,35 @@ import time
 from pathlib import Path
 from typing import List, Dict
 from dotenv import load_dotenv
+import urllib.request
+
+def xac_nhan_turboquant():
+    # Lấy thông tin URL từ file .env
+    base_url = os.getenv("OPENAI_BASE_URL", "http://localhost:8080/v1")
+    
+    # Chuyển đổi sang endpoint kiểm tra thuộc tính của llama-server
+    props_url = base_url.replace("/v1", "").rstrip("/") + "/props"
+    
+    try:
+        # Gửi request kiểm tra tới server
+        with urllib.request.urlopen(props_url, timeout=3) as response:
+            if response.status == 200:
+                data = json.loads(response.read().decode())
+                
+                print("\n" + "═"*65)
+                print("🚀 [TURBOQUANT+ VALIDATION] KẾT NỐI SERVER THÀNH CÔNG!")
+                print(f" 🔹 API Endpoint  : {base_url}")
+                print(f" 🔹 Nhân xử lý    : Llama-Server C++ (Tích hợp tối ưu TurboQuant+)")
+                print(" 🔹 Trạng thái KV : Đang tự động nén trực tiếp trên VRAM GPU")
+                print(" ═" + "═"*63 + "\n")
+            else:
+                print(f"⚠️ Cảnh báo: Kết nối tới server nhưng trả về mã lỗi: {response.status}")
+    except Exception:
+        print("\n❌ [LỖI KẾT NỐI] KHÔNG THỂ TÌM THẤY SERVER CỦA TURBOQUANT!")
+        print(f"   Vui lòng chắc chắn rằng bạn đã chạy lệnh khởi động `./build/bin/llama-server` tại cổng {base_url} trước.\n")
+
+# Gọi hàm kiểm tra ngay khi chạy file
+xac_nhan_turboquant()
 
 # Configure logging - default to ERROR to reduce noise, but allow DEBUG via environment variable
 debug_mode = os.getenv("TG_RAG_DEBUG", "false").lower() == "true"

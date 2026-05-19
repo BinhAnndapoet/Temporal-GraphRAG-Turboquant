@@ -11,6 +11,7 @@ from .llm.embedding import (
     openai_embedding,
     azure_openai_embedding,
     amazon_bedrock_embedding,
+    ollama_embedding,
 )
 from .utils.types import EmbeddingFunc
 import numpy as np
@@ -57,6 +58,8 @@ def create_embedding_function(embedding_provider: str, api_key: Optional[str] = 
         base_url = os.getenv('OPENAI_BASE_URL')
     elif not base_url and embedding_provider == "bedrock":
         base_url = os.getenv('BEDROCK_BASE_URL')
+    elif not base_url and embedding_provider == "ollama":
+        base_url = os.getenv('OLLAMA_BASE_URL')
     
     async def embedding_wrapper(texts: List[str]) -> np.ndarray:
         kwargs = {}
@@ -71,6 +74,8 @@ def create_embedding_function(embedding_provider: str, api_key: Optional[str] = 
             return await azure_openai_embedding(texts)
         elif embedding_provider == "bedrock":
             return await amazon_bedrock_embedding(texts)
+        elif embedding_provider == "ollama":
+            return await ollama_embedding(texts, base_url=base_url)
         else:
             # Default to OpenAI
             return await openai_embedding(texts, **kwargs)
@@ -85,6 +90,12 @@ def create_embedding_function(embedding_provider: str, api_key: Optional[str] = 
     elif embedding_provider == "bedrock":
         return EmbeddingFunc(
             embedding_dim=1024,  # Typical for Bedrock embeddings
+            func=embedding_wrapper,
+            max_token_size=8192
+        )
+    elif embedding_provider == "ollama":
+        return EmbeddingFunc(
+            embedding_dim=768,
             func=embedding_wrapper,
             max_token_size=8192
         )
@@ -103,6 +114,7 @@ def create_temporal_graphrag_from_config(
     override_config: Optional[Dict[str, Any]] = None,
     api_key: Optional[str] = None,
     base_url: Optional[str] = None,
+    embedding_base_url: Optional[str] = None,
 ) -> TemporalGraphRAG:
     """
     Create a TemporalGraphRAG instance from a configuration file.
@@ -120,6 +132,9 @@ def create_temporal_graphrag_from_config(
         api_key: API key (optional, will use env var if not provided)
         base_url: Base URL (optional, for OpenAI/Azure custom endpoints, 
                  can also use OPENAI_BASE_URL env var)
+        embedding_base_url: Base URL for embeddings (optional). This is kept
+                 separate from base_url so local OpenAI-compatible LLM servers
+                 do not accidentally receive Ollama embedding requests.
         
     Returns:
         Fully configured TemporalGraphRAG instance
@@ -191,7 +206,16 @@ def create_temporal_graphrag_from_config(
     if embedding_provider == "gemini":
         embedding_provider = "openai"
     
-    embedding_base_url = base_url
+    resolved_embedding_base_url = embedding_base_url
+    if resolved_embedding_base_url is None and embedding_provider == provider:
+        resolved_embedding_base_url = base_url
+    elif (
+        resolved_embedding_base_url is None
+        and embedding_provider in ("openai", "azure")
+        and provider in ("openai", "azure")
+    ):
+        resolved_embedding_base_url = base_url
+    embedding_api_key: Optional[str] = None
     
     if embedding_provider == "openai":
         # Always use OpenAI API key for OpenAI embeddings
@@ -201,8 +225,8 @@ def create_temporal_graphrag_from_config(
                 "OpenAI API key not found for embeddings. "
                 "Please set OPENAI_API_KEY environment variable."
             )
-        if not embedding_base_url:
-            embedding_base_url = os.getenv('OPENAI_BASE_URL')
+        if not resolved_embedding_base_url:
+            resolved_embedding_base_url = os.getenv('OPENAI_BASE_URL')
     elif embedding_provider == "azure":
         # Always use Azure API key for Azure embeddings
         embedding_api_key = get_api_key_for_provider("azure")
@@ -211,8 +235,8 @@ def create_temporal_graphrag_from_config(
                 "Azure OpenAI API key not found for embeddings. "
                 "Please set AZURE_OPENAI_API_KEY environment variable."
             )
-        if not embedding_base_url:
-            embedding_base_url = os.getenv('OPENAI_BASE_URL')  # Azure also uses OPENAI_BASE_URL
+        if not resolved_embedding_base_url:
+            resolved_embedding_base_url = os.getenv('OPENAI_BASE_URL')  # Azure also uses OPENAI_BASE_URL
     elif embedding_provider == "bedrock":
         # Always use Bedrock credentials for Bedrock embeddings
         embedding_api_key = get_api_key_for_provider("bedrock")
@@ -222,13 +246,17 @@ def create_temporal_graphrag_from_config(
                 "Please set AWS_ACCESS_KEY_ID environment variable."
             )
         # Bedrock doesn't use base_url, uses AWS region instead
+    elif embedding_provider == "ollama":
+        embedding_api_key = None
+        if not resolved_embedding_base_url:
+            resolved_embedding_base_url = os.getenv('OLLAMA_BASE_URL')
     
     # Create LLM and embedding functions
     llm_func = create_llm_function(provider, model, api_key=api_key, base_url=base_url)
     embedding_func = create_embedding_function(
         embedding_provider=embedding_provider, 
         api_key=embedding_api_key, 
-        base_url=embedding_base_url
+        base_url=resolved_embedding_base_url
     )
     
     # Create TemporalGraphRAG instance

@@ -7,7 +7,7 @@
 building:
   # Corpus and data paths
   corpus_path: "./ECT_data/"
-  working_dir: "./graph_output"  # If null, auto-generated from corpus, model, and datetime
+  working_dir: "./output_ollama"  # If null, auto-generated from corpus, model, and datetime
 
   # Model configuration
   baseline: "temporalrag"  # Only temporalrag is currently supported
@@ -15,7 +15,7 @@ building:
   model: "gemini-2.5-flash-lite"
   
   # Embedding configuration
-  embedding_provider: "openai"  # Embedding provider: openai, azure, bedrock (defaults to provider if not specified)
+  embedding_provider: "ollama"  # Embedding provider: openai, azure, bedrock, ollama (defaults to provider if not specified)
 
   # Chunking parameters
   chunk_size: 1200  # Max token size per chunk
@@ -39,9 +39,12 @@ building:
 querying:
   # Data and model paths
   corpus_path: "./ECT_data/old"
-  working_dir: "./graph_output"  # Path of graph to be loaded
+  working_dir: "./output_ollama"  # Path of graph to be loaded
   provider: "gemini"  # LLM provider: openai, azure, bedrock, gemini, ollama (auto-detected from model if not specified)
   model: "gemini-2.5-flash"  # Gemini model name 
+
+  # Embedding configuration
+  embedding_provider: "ollama"
 
   # Query mode
   mode: "local"  # Query mode: "local", "global"
@@ -76,3 +79,10 @@ querying:
   # Enhanced retrieval system
   use_enhanced_retrieval: false  # Enable/disable enhanced temporal retrieval system
   enhanced_output_suffix: "_enhanced"  # Suffix to add to output file when using enhanced retrieval
+
+
+llm:
+  provider: "openai"              # Thiết lập provider là openai để hệ thống gọi hàm openai_complete_if_cache
+  model: "qwen3-14b-instruct"      # Bạn có thể điền tên bất kỳ, server cục bộ sẽ tự nhận diện mô hình đang load sẵn
+  max_tokens: 4096                # Giới hạn token đầu ra cho mỗi câu trả lời
+  temperature: 0.0                # Đặt bằng 0 để kết quả trích xuất thực thể đồ thị có tính chính xác cao nhất

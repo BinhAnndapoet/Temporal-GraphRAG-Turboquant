@@ -1,0 +1,57 @@
+# Temporal GraphRAG evaluation config for full local runs.
+# This keeps Gemini + Ollama/nomic baseline settings, but disables entity
+# summarization because full ECT-QA base builds can stall in entity/relation
+# summary merging after extraction.
+
+building:
+  corpus_path: "./ECT_data/"
+  working_dir: "./output_ollama_eval"
+
+  baseline: "temporalrag"
+  provider: "gemini"
+  model: "gemini-2.5-flash-lite"
+
+  embedding_provider: "ollama"
+
+  chunk_size: 1200
+  chunk_overlap: 100
+  disable_entity_summarization: true
+
+  enable_seasonal_matching: false
+  enable_community_summary: true
+
+  enable_incremental: false
+  preserve_communities: false
+  force_rebuild: false
+
+querying:
+  corpus_path: "./ECT_data/old"
+  working_dir: "./output_ollama_eval"
+  provider: "gemini"
+  model: "gemini-2.5-flash"
+
+  embedding_provider: "ollama"
+
+  mode: "local"
+  baseline: "temporalrag"
+  evaluation_mode: "global"
+  num_questions: null
+
+  output_file: null
+
+  top_k: 50
+  truncated_context_length: 8000
+  enable_entity_retrieval: false
+  enable_subgraph: true
+  enable_mixed_relationship: false
+  seed_node_method: "relations"
+
+  local_max_token_for_text_unit: 4000
+  local_max_token_for_local_context: 6000
+  local_max_token_for_community_report: 2000
+
+  global_max_token_for_community_report: 16384
+  naive_max_token_for_text_unit: 12000
+
+  use_enhanced_retrieval: false
+  enhanced_output_suffix: "_enhanced"

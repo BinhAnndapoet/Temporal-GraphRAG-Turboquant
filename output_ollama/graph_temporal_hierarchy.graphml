@@ -1,0 +1,87 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
+  <key id="d3" for="edge" attr.name="description" attr.type="string" />
+  <key id="d2" for="node" attr.name="source_id" attr.type="string" />
+  <key id="d1" for="node" attr.name="instantiation" attr.type="boolean" />
+  <key id="d0" for="node" attr.name="entity_type" attr.type="string" />
+  <graph edgedefault="directed">
+    <node id="&quot;2020&quot;">
+      <data key="d0">YEAR</data>
+      <data key="d1">False</data>
+      <data key="d2" />
+    </node>
+    <node id="&quot;2020-Q1&quot;">
+      <data key="d0">QUARTER</data>
+      <data key="d1">False</data>
+      <data key="d2" />
+    </node>
+    <node id="&quot;2019&quot;">
+      <data key="d0">YEAR</data>
+      <data key="d1">False</data>
+      <data key="d2" />
+    </node>
+    <node id="&quot;2020-01&quot;">
+      <data key="d0">YEAR</data>
+      <data key="d1">False</data>
+      <data key="d2" />
+    </node>
+    <node id="&quot;2020-01-01&quot;">
+      <data key="d0">DATE</data>
+      <data key="d1">True</data>
+      <data key="d2">chunk-7c6fef5104c36de3fca8465b48396ee3</data>
+    </node>
+    <node id="&quot;2018&quot;">
+      <data key="d0">YEAR</data>
+      <data key="d1">True</data>
+      <data key="d2">chunk-7c6fef5104c36de3fca8465b48396ee3</data>
+    </node>
+    <node id="&quot;2020-03-25&quot;">
+      <data key="d0">DATE</data>
+      <data key="d1">True</data>
+      <data key="d2">chunk-7c6fef5104c36de3fca8465b48396ee3</data>
+    </node>
+    <node id="&quot;2021&quot;">
+      <data key="d0">YEAR</data>
+      <data key="d1">True</data>
+      <data key="d2">chunk-8f8bdf628451868b4c3b8ef83fb42790</data>
+    </node>
+    <node id="&quot;2019-Q1&quot;">
+      <data key="d0">QUARTER</data>
+      <data key="d1">True</data>
+      <data key="d2">chunk-390a3561da2014fd7053d9a0be18fd4c&lt;SEP&gt;chunk-8f8bdf628451868b4c3b8ef83fb42790</data>
+    </node>
+    <node id="&quot;2020-03-31&quot;">
+      <data key="d0">DATE</data>
+      <data key="d1">True</data>
+      <data key="d2" />
+    </node>
+    <node id="&quot;Q2&quot;">
+      <data key="d0">UNKNOWN</data>
+      <data key="d1">True</data>
+      <data key="d2">chunk-390a3561da2014fd7053d9a0be18fd4c</data>
+    </node>
+    <node id="&quot;Q1&quot;">
+      <data key="d0">UNKNOWN</data>
+      <data key="d1">True</data>
+      <data key="d2">chunk-390a3561da2014fd7053d9a0be18fd4c</data>
+    </node>
+    <edge source="&quot;2020&quot;" target="&quot;2020-Q1&quot;">
+      <data key="d3">YEAR-&gt;QUARTER</data>
+    </edge>
+    <edge source="&quot;2020-Q1&quot;" target="&quot;2020-01&quot;">
+      <data key="d3">QUARTER-&gt;YEAR</data>
+    </edge>
+    <edge source="&quot;2019&quot;" target="&quot;2019-Q1&quot;">
+      <data key="d3">YEAR-&gt;QUARTER</data>
+    </edge>
+    <edge source="&quot;2020-01&quot;" target="&quot;2020-01-01&quot;">
+      <data key="d3">YEAR-&gt;DATE</data>
+    </edge>
+    <edge source="&quot;2020-01&quot;" target="&quot;2020-03-25&quot;">
+      <data key="d3">YEAR-&gt;DATE</data>
+    </edge>
+    <edge source="&quot;2020-01&quot;" target="&quot;2020-03-31&quot;">
+      <data key="d3">YEAR-&gt;DATE</data>
+    </edge>
+  </graph>
+</graphml>

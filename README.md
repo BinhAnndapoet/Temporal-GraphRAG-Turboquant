@@ -1218,3 +1218,836 @@ python scripts/eval/run_batch_queries.py \
 ```
 
 Không trộn output của hai embedding model trong cùng một folder.
+
+## Kiểm Tra Local TurboQuant LLM
+
+Repo này vẫn có thể dùng Gemini theo cấu hình mặc định trong `tgrag/configs/config.yaml`. Tuy nhiên, nếu mục tiêu là benchmark TurboQuant thì phải ép rõ chat LLM đi qua `llama-server` local. Dòng healthcheck TurboQuant chỉ chứng minh endpoint `/props` đang sống; nó không chứng minh build graph thật sự gọi local model. Bằng chứng đúng phải kiểm bằng hai nơi: cache `kv_store_llm_response_cache.json` và log request của `llama-server`.
+
+Trong chế độ TurboQuant, source dùng `provider=openai` vì `llama-server` expose API theo chuẩn OpenAI-compatible `/v1`. Đây là giao thức local, không phải OpenAI cloud, miễn là `base_url` trỏ về `http://localhost:8080/v1`.
+
+Quy ước thư mục trong phần này:
+
+| Loại file | Vị trí | Lý do |
+|---|---|---|
+| Graph output | `outputs/<case_name>` | Tên cố định theo case, dễ so sánh và không làm rối root repo. |
+| Log chạy | `logs/<case_name>_${RUN_ID}.txt` | Giữ lịch sử từng lần chạy, không ghi đè log cũ. |
+| Cache LLM | `outputs/<case_name>/kv_store_llm_response_cache.json` | Dùng để xác nhận model LLM thật sự đã được gọi. |
+
+Lưu ý benchmark: nếu muốn đo fresh run, hãy dùng output folder mới hoặc xóa output folder của case đó trước khi chạy lại. Nếu chạy lại trên cùng `outputs/<case_name>`, GraphRAG có thể reuse cache/skip document đã có, làm thời gian không còn đại diện cho build mới.
+
+### Terminal 1: Start llama-server với alias cố định
+
+Alias phải khớp với giá trị truyền vào `--model` khi build graph. Ví dụ dưới đây load model GGUF Qwen2.5 7B Q8 và đặt alias là `qwen2.5-7b-instruct-q8-turbo3`.
+
+```bash
+conda activate turboquant
+
+export RUN_ID=$(date +%Y%m%d_%H%M%S)
+echo "RUN_ID=${RUN_ID}"
+
+mkdir -p /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/logs
+export SERVER_LOG=/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/logs/llama_server_qwen25_7b_q8_turbo3_${RUN_ID}.txt
+echo "SERVER_LOG=${SERVER_LOG}"
+
+cd /home/guest/Projects/Research/llama-cpp-turboquant
+
+./build/bin/llama-server \
+  -m /home/guest/Projects/Research/llama-cpp-turboquant/models/qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf \
+  --alias qwen2.5-7b-instruct-q8-turbo3 \
+  --host 127.0.0.1 \
+  --port 8080 \
+  -ctk q8_0 \
+  -ctv turbo3 \
+  -fa on \
+  -ngl 99 \
+  -c 32768 \
+  --log-file ${SERVER_LOG}
+```
+
+Giữ terminal này mở. Nếu tắt terminal này thì build với `--local_llm_backend turboquant` sẽ fail sớm ở bước healthcheck.
+
+Ghi lại giá trị `RUN_ID` được in ra, ví dụ `RUN_ID=20260520_151152`. Biến môi trường không tự truyền qua terminal khác, nên Terminal 2 phải set lại đúng giá trị này nếu muốn tên log server và log build khớp nhau.
+
+### Terminal 2: Build 1 document qua local TurboQuant
+
+Lệnh này ép build graph dùng local `llama-server` cho phần LLM extract/summarize, còn embedding vẫn dùng Ollama ở `http://localhost:11434`.
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+# Copy đúng RUN_ID đã được in ở Terminal 1.
+export RUN_ID=copy_RUN_ID_from_terminal_1_here
+
+mkdir -p outputs logs
+export CASE=verify_qwen25_7b_turboquant_1doc
+export OUT=outputs/${CASE}
+export BUILD_LOG=logs/build_${CASE}_${RUN_ID}.txt
+export SERVER_LOG=logs/llama_server_qwen25_7b_q8_turbo3_${RUN_ID}.txt
+
+echo "OUT=${OUT}"
+echo "BUILD_LOG=${BUILD_LOG}"
+echo "SERVER_LOG=${SERVER_LOG}"
+
+export OPENAI_BASE_URL=http://localhost:8080/v1
+export OPENAI_API_KEY=sk-local
+export OLLAMA_BASE_URL=http://localhost:11434
+
+python -u build_graph.py \
+  --local_llm_backend turboquant \
+  --model qwen2.5-7b-instruct-q8-turbo3 \
+  --base_url http://localhost:8080/v1 \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --llm_max_async 1 \
+  --llm_timeout 600 \
+  --output_dir ./${OUT} \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --num_docs 1 \
+  2>&1 | tee ${BUILD_LOG}
+```
+
+Ý nghĩa các tham số quan trọng:
+
+| Tham số | Ý nghĩa |
+|---|---|
+| `--local_llm_backend turboquant` | Bật chế độ local LLM qua `llama-server`. |
+| `--model qwen2.5-7b-instruct-q8-turbo3` | Tên alias model đang được `llama-server` expose. |
+| `--base_url http://localhost:8080/v1` | Endpoint OpenAI-compatible local của `llama-server`. |
+| `--embedding_provider ollama` | Embedding vẫn dùng Ollama, không dùng Gemini. |
+| `--embedding_base_url http://localhost:11434` | Endpoint Ollama embedding. |
+| `--llm_max_async 1` | Giới hạn client chỉ gửi 1 request LLM đồng thời để ổn định khi build. |
+| `--llm_timeout 600` | Timeout mỗi request LLM là 600 giây, tránh bị cắt sớm khi local model sinh lâu. |
+| `--output_dir ./outputs/verify_qwen25_7b_turboquant_1doc` | Lưu graph vào folder cố định theo case. |
+
+### Kiểm Tra Backend Thật Sự Đã Dùng
+
+Sau khi build xong, kiểm cache LLM:
+
+```bash
+python - <<'PY'
+import json, os
+from pathlib import Path
+p = Path(os.environ['OUT']) / "kv_store_llm_response_cache.json"
+data = json.loads(p.read_text())
+models = {}
+for v in data.values():
+    if isinstance(v, dict):
+        models[v.get("model")] = models.get(v.get("model"), 0) + 1
+print(models)
+PY
+```
+
+Kết quả đúng phải có dạng:
+
+```text
+{'qwen2.5-7b-instruct-q8-turbo3': ...}
+```
+
+Nếu cache hiện `gemini-2.5-flash-lite`, nghĩa là build đã dùng Gemini và chưa benchmark đúng local TurboQuant LLM.
+
+Kiểm thêm log server và timer build:
+
+```bash
+grep -E "POST /v1/chat/completions" ${SERVER_LOG}
+grep -E "\[build-stage\]|\[build-detail\]|\[timer\] insert documents" ${BUILD_LOG}
+```
+
+Dòng `POST /v1/chat/completions` trong log server chứng minh request LLM đã đi vào `llama-server`. Các dòng `[build-stage]` và `[build-detail]` dùng để xác định thời gian tốn ở bước nào: chunk extraction, vector embedding, community report, hoặc persist storage.
+
+### Nếu Không Bật TurboQuant Thì Chạy Như Thế Nào?
+
+Nếu không truyền `--local_llm_backend`, script không tự dùng TurboQuant. Khi đó build/query đọc `provider` và `model` từ `tgrag/configs/config.yaml`. Với cấu hình hiện tại của repo cũ, build mặc định là Gemini cho LLM extract/summarize và Ollama cho embedding.
+
+Nói ngắn gọn:
+
+| Cách chạy | LLM extract/summarize | Embedding | Có dùng `llama-server` không? | Terminal cần mở | Dùng khi nào |
+|---|---|---|---|---|---|
+| Không truyền backend | Theo `tgrag/configs/config.yaml`, hiện là Gemini | Theo config, hiện là Ollama | Không, trừ khi config trỏ OpenAI-compatible local | Terminal build/query + Ollama nếu embedding local | Baseline theo config cũ. |
+| `--provider gemini --model ...` | Gemini explicit | Ollama nếu truyền `--embedding_provider ollama` | Không | Terminal build/query + Ollama nếu embedding local | Baseline cloud/API rõ ràng. |
+| `--local_llm_backend ollama` | Ollama native, ví dụ `qwen3:14b` | Ollama | Không | Terminal Ollama + Terminal build/query | So sánh local LLM không TurboQuant. |
+| `--local_llm_backend turboquant` | `llama-server` local qua OpenAI-compatible `/v1` | Ollama | Có | Terminal `llama-server` + Terminal Ollama + Terminal build/query | Benchmark TurboQuant local LLM. |
+
+Điểm quan trọng: `llama-server` có đang chạy cũng không làm build tự dùng TurboQuant. Muốn dùng TurboQuant thật phải truyền `--local_llm_backend turboquant` hoặc cấu hình provider/base URL tương đương.
+
+### Quy Ước Log Cho Các Case So Sánh
+
+Mỗi case nên có:
+
+| Biến | Ví dụ | Ý nghĩa |
+|---|---|---|
+| `CASE` | `compare_turboquant_qwen25_7b_1doc` | Tên case cố định, dùng cho output và log. |
+| `OUT` | `outputs/${CASE}` | Folder graph output. |
+| `BUILD_LOG` | `logs/build_${CASE}_${RUN_ID}.txt` | Log build graph. |
+| `QUERY_LOG` | `logs/query_${CASE}_${RUN_ID}.txt` | Log query graph. |
+| `SERVER_LOG` | `logs/llama_server_qwen25_7b_q8_turbo3_${RUN_ID}.txt` | Log `llama-server`, chỉ có ở case TurboQuant. |
+
+`RUN_ID` dùng để log không bị ghi đè. `OUT` cố định theo case để dễ tìm graph. Nếu cần fresh benchmark, hãy xóa `OUT` trước khi build lại hoặc đổi `CASE` mới.
+
+### Terminal Ollama: Dùng Cho Embedding Và Case Ollama Native
+
+Các case trong repo này thường dùng Ollama embedding ở `http://localhost:11434`. Nếu Ollama chưa chạy, mở terminal riêng:
+
+```bash
+ollama serve
+```
+
+Kiểm model embedding và model chat local:
+
+```bash
+ollama list
+ollama pull nomic-embed-text
+ollama pull qwen3:14b
+```
+
+### Kịch Bản Build 1 Document Để So Sánh
+
+Chạy các lệnh dưới đây ở terminal repo chính:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+export RUN_ID=$(date +%Y%m%d_%H%M%S)
+echo "RUN_ID=${RUN_ID}"
+
+mkdir -p outputs logs
+export OLLAMA_BASE_URL=http://localhost:11434
+```
+
+#### Case 1: Baseline Theo Config Mặc Định
+
+Lệnh này không bật TurboQuant. Nó đọc `building.provider` và `building.model` trong `tgrag/configs/config.yaml`.
+
+```bash
+export CASE=compare_config_default_1doc
+export OUT=outputs/${CASE}
+export BUILD_LOG=logs/build_${CASE}_${RUN_ID}.txt
+
+python -u build_graph.py \
+  --output_dir ./${OUT} \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --num_docs 1 \
+  2>&1 | tee ${BUILD_LOG}
+```
+
+Kiểm model thật sự được dùng trong cache:
+
+```bash
+python - <<'PY'
+import json, os
+from pathlib import Path
+p = Path(os.environ['OUT']) / "kv_store_llm_response_cache.json"
+data = json.loads(p.read_text())
+models = {}
+for v in data.values():
+    if isinstance(v, dict):
+        models[v.get("model")] = models.get(v.get("model"), 0) + 1
+print(models)
+PY
+```
+
+#### Case 2: Gemini Explicit + Ollama Embedding
+
+Dùng khi cần baseline cloud/API rõ ràng, không phụ thuộc config mặc định. Case này không cần `llama-server`, nhưng cần Gemini key hợp lệ trong `.env` hoặc môi trường.
+
+```bash
+export CASE=compare_gemini_ollama_embed_1doc
+export OUT=outputs/${CASE}
+export BUILD_LOG=logs/build_${CASE}_${RUN_ID}.txt
+
+python -u build_graph.py \
+  --provider gemini \
+  --model gemini-2.5-flash-lite \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --output_dir ./${OUT} \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --num_docs 1 \
+  2>&1 | tee ${BUILD_LOG}
+```
+
+#### Case 3: Local Ollama LLM Không TurboQuant + Ollama Embedding
+
+Dùng để so sánh local LLM native trước khi bật TurboQuant. Case này cần `ollama serve`, không cần `llama-server`.
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+export CASE=compare_ollama_qwen3_14b_1doc
+export OUT=outputs/${CASE}
+export BUILD_LOG=logs/build_${CASE}_${RUN_ID}.txt
+
+python -u build_graph.py \
+  --local_llm_backend ollama \
+  --model qwen3:14b \
+  --base_url http://localhost:11434 \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --llm_max_async 1 \
+  --llm_timeout 600 \
+  --output_dir ./${OUT} \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --num_docs 1 \
+  2>&1 | tee ${BUILD_LOG}
+```
+
+Nếu local Ollama bị chậm hoặc fail chunk, đó là kết quả benchmark của backend Ollama native, không phải lỗi TurboQuant.
+
+#### Case 4: Local TurboQuant LLM + Ollama Embedding
+
+Case này cần `llama-server` ở Terminal 1 và Ollama ở `http://localhost:11434`. Alias trong `--model` phải khớp với `--alias` của server.
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+export CASE=compare_turboquant_qwen25_7b_1doc
+export OUT=outputs/${CASE}
+export BUILD_LOG=logs/build_${CASE}_${RUN_ID}.txt
+
+export OPENAI_BASE_URL=http://localhost:8080/v1
+export OPENAI_API_KEY=sk-local
+export OLLAMA_BASE_URL=http://localhost:11434
+
+python -u build_graph.py \
+  --local_llm_backend turboquant \
+  --model qwen2.5-7b-instruct-q8-turbo3 \
+  --base_url http://localhost:8080/v1 \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --llm_max_async 1 \
+  --llm_timeout 600 \
+  --output_dir ./${OUT} \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --num_docs 1 \
+  2>&1 | tee ${BUILD_LOG}
+```
+
+Kiểm nhanh thời gian, lỗi chunk, và backend thật:
+
+```bash
+grep -E "\[build-detail\] chunk LLM extraction|\[build-stage\] community report generation|\[timer\] insert documents" logs/build_*_1doc_${RUN_ID}.txt
+grep -c "Failed to process chunk" logs/build_*_1doc_${RUN_ID}.txt
+
+python - <<'PY'
+import json, os
+from pathlib import Path
+p = Path(os.environ['OUT']) / "kv_store_llm_response_cache.json"
+data = json.loads(p.read_text())
+models = {}
+for v in data.values():
+    if isinstance(v, dict):
+        models[v.get("model")] = models.get(v.get("model"), 0) + 1
+print(models)
+PY
+```
+
+Với case TurboQuant, kiểm thêm server log:
+
+```bash
+grep -E "POST /v1/chat/completions" logs/llama_server_qwen25_7b_q8_turbo3_${RUN_ID}.txt
+```
+
+
+### Bộ 4 Case Benchmark 1-doc Đầy Đủ
+
+Bộ này dùng để tách hai loại so sánh:
+
+| Nhóm so sánh | Case | Ý nghĩa |
+|---|---|---|
+| Công bằng về TurboQuant | Case 1 và Case 2 | Cùng GGUF Qwen2.5 7B Q8, cùng `llama-server`, chỉ đổi KV cache `ctv=turbo3` vs `ctv=q8_0`. |
+| Thực dụng theo backend | Case 3 và Case 4 | So sánh local Ollama Qwen3 14B và Gemini baseline. Không dùng để kết luận riêng tác động TurboQuant vì model/runtime khác nhau. |
+
+Tất cả case dưới đây dùng cùng embedding Ollama ở `http://localhost:11434`, mặc định là `nomic-embed-text` trong source/config hiện tại.
+
+#### Setup Chung
+
+Terminal Ollama:
+
+```bash
+ollama serve
+```
+
+Terminal repo:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+export RUN_ID=$(date +%Y%m%d_%H%M%S)
+echo "RUN_ID=${RUN_ID}"
+
+mkdir -p outputs logs
+export OLLAMA_BASE_URL=http://localhost:11434
+
+ollama list
+ollama pull nomic-embed-text
+```
+
+#### Case 1: Qwen2.5 7B Q8 Có TurboQuant KV
+
+Terminal server:
+
+```bash
+conda activate turboquant
+
+export RUN_ID=copy_or_create_RUN_ID_here
+export SERVER_LOG=/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/logs/llama_server_qwen25_7b_q8_turbo3_${RUN_ID}.txt
+
+cd /home/guest/Projects/Research/llama-cpp-turboquant
+
+./build/bin/llama-server \
+  -m /home/guest/Projects/Research/llama-cpp-turboquant/models/qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf \
+  --alias qwen2.5-7b-instruct-q8-turbo3 \
+  --host 127.0.0.1 \
+  --port 8080 \
+  -ctk q8_0 \
+  -ctv turbo3 \
+  -fa on \
+  -ngl 99 \
+  -c 32768 \
+  --parallel 1 \
+  --log-file ${SERVER_LOG}
+```
+
+Terminal build:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+export RUN_ID=copy_RUN_ID_from_server_terminal
+export CASE=test_turboquant_qwen25_7b_turbo3_1doc
+export OUT=outputs/${CASE}
+export BUILD_LOG=logs/build_${CASE}_${RUN_ID}.txt
+export TG_RAG_USAGE_LOG=logs/usage_${CASE}_${RUN_ID}.jsonl
+
+mkdir -p outputs logs
+
+export OPENAI_BASE_URL=http://localhost:8080/v1
+export OPENAI_API_KEY=sk-local
+export OLLAMA_BASE_URL=http://localhost:11434
+
+python -u build_graph.py \
+  --local_llm_backend turboquant \
+  --model qwen2.5-7b-instruct-q8-turbo3 \
+  --base_url http://localhost:8080/v1 \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --llm_max_async 1 \
+  --llm_timeout 600 \
+  --output_dir ./${OUT} \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --num_docs 1 \
+  2>&1 | tee ${BUILD_LOG}
+```
+
+Sau khi xong, dừng server bằng `Ctrl+C` trước khi chạy Case 2 để giải phóng VRAM.
+
+#### Case 2: Qwen2.5 7B Q8 Không TurboQuant KV
+
+Case này dùng cùng GGUF Qwen2.5 7B Q8 nhưng KV cache baseline `K=q8_0`, `V=q8_0`. Đây là baseline công bằng để đo tác động của TurboQuant.
+
+Terminal server:
+
+```bash
+conda activate turboquant
+
+export RUN_ID=copy_or_create_RUN_ID_here
+export SERVER_LOG=/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/logs/llama_server_qwen25_7b_q8_baseline_${RUN_ID}.txt
+
+cd /home/guest/Projects/Research/llama-cpp-turboquant
+
+./build/bin/llama-server \
+  -m /home/guest/Projects/Research/llama-cpp-turboquant/models/qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf \
+  --alias qwen2.5-7b-instruct-q8-baseline \
+  --host 127.0.0.1 \
+  --port 8080 \
+  -ctk q8_0 \
+  -ctv q8_0 \
+  -fa on \
+  -ngl 99 \
+  -c 32768 \
+  --parallel 1 \
+  --log-file ${SERVER_LOG}
+```
+
+Nếu OOM với `-c 32768`, giảm context runtime xuống:
+
+```bash
+-c 8192
+```
+
+Terminal build:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+export RUN_ID=copy_RUN_ID_from_server_terminal
+export CASE=test_baseline_qwen25_7b_q8_1doc
+export OUT=outputs/${CASE}
+export BUILD_LOG=logs/build_${CASE}_${RUN_ID}.txt
+export TG_RAG_USAGE_LOG=logs/usage_${CASE}_${RUN_ID}.jsonl
+
+mkdir -p outputs logs
+
+export OPENAI_BASE_URL=http://localhost:8080/v1
+export OPENAI_API_KEY=sk-local
+export OLLAMA_BASE_URL=http://localhost:11434
+
+python -u build_graph.py \
+  --provider openai \
+  --model qwen2.5-7b-instruct-q8-baseline \
+  --base_url http://localhost:8080/v1 \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --llm_max_async 1 \
+  --llm_timeout 600 \
+  --output_dir ./${OUT} \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --num_docs 1 \
+  2>&1 | tee ${BUILD_LOG}
+```
+
+Ghi chú: case này vẫn dùng `--provider openai` vì `llama-server` expose OpenAI-compatible `/v1`. Nó không phải OpenAI cloud vì `--base_url` trỏ localhost.
+
+#### Case 3: Ollama Qwen3 14B Native Không TurboQuant
+
+Case này dùng local Ollama Qwen3 14B. Đây là baseline thực dụng, không cùng model weights với Qwen2.5 GGUF.
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+export RUN_ID=$(date +%Y%m%d_%H%M%S)
+export CASE=test_ollama_qwen3_14b_native_1doc
+export OUT=outputs/${CASE}
+export BUILD_LOG=logs/build_${CASE}_${RUN_ID}.txt
+export TG_RAG_USAGE_LOG=logs/usage_${CASE}_${RUN_ID}.jsonl
+
+mkdir -p outputs logs
+
+ollama list
+ollama pull nomic-embed-text
+ollama pull qwen3:14b
+
+export OLLAMA_BASE_URL=http://localhost:11434
+
+python -u build_graph.py \
+  --local_llm_backend ollama \
+  --model qwen3:14b \
+  --base_url http://localhost:11434 \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --llm_max_async 1 \
+  --llm_timeout 600 \
+  --output_dir ./${OUT} \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --num_docs 1 \
+  2>&1 | tee ${BUILD_LOG}
+```
+
+#### Case 4: Gemini Baseline + Ollama Embedding
+
+Case này không cần `llama-server`. TurboQuant không giúp gì cho Gemini vì LLM extract/summarize đi qua Gemini API.
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+export RUN_ID=$(date +%Y%m%d_%H%M%S)
+export CASE=test_gemini_flash_lite_ollama_embed_1doc
+export OUT=outputs/${CASE}
+export BUILD_LOG=logs/build_${CASE}_${RUN_ID}.txt
+export TG_RAG_USAGE_LOG=logs/usage_${CASE}_${RUN_ID}.jsonl
+
+mkdir -p outputs logs
+
+ollama list
+ollama pull nomic-embed-text
+
+export OLLAMA_BASE_URL=http://localhost:11434
+
+python -u build_graph.py \
+  --provider gemini \
+  --model gemini-2.5-flash-lite \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --output_dir ./${OUT} \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --num_docs 1 \
+  2>&1 | tee ${BUILD_LOG}
+```
+
+#### Kiểm Kết Quả Chung Cho Mỗi Case
+
+Sau mỗi build, chạy:
+
+```bash
+grep -c "Failed to process chunk" ${BUILD_LOG}
+grep -E "\[build-detail\] chunk LLM extraction|\[build-stage\] community report generation|\[timer\] insert documents" ${BUILD_LOG}
+
+python - <<'PY'
+import json, os
+from pathlib import Path
+p = Path(os.environ["OUT"]) / "kv_store_llm_response_cache.json"
+data = json.loads(p.read_text())
+models = {}
+for v in data.values():
+    if isinstance(v, dict):
+        models[v.get("model")] = models.get(v.get("model"), 0) + 1
+print(models)
+PY
+```
+
+Kỳ vọng cache theo case:
+
+| Case | Cache model kỳ vọng |
+|---|---|
+| TurboQuant Qwen2.5 | `qwen2.5-7b-instruct-q8-turbo3` |
+| Baseline Qwen2.5 không TurboQuant | `qwen2.5-7b-instruct-q8-baseline` |
+| Ollama Qwen3 14B | `qwen3:14b` |
+| Gemini baseline | `gemini-2.5-flash-lite` |
+
+Với các case `llama-server`, kiểm thêm server log:
+
+```bash
+grep -E "POST /v1/chat/completions" ${SERVER_LOG}
+```
+
+### Kịch Bản Query Sau Khi Build
+
+Query phải dùng cùng backend LLM với graph build nếu muốn benchmark nhất quán. Query cũng cần log riêng để đọc lại output, retrieval detail, lỗi request, và timer.
+
+Chạy setup chung trước:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda activate turboquant
+
+# Dùng RUN_ID hiện tại hoặc tạo mới cho lượt query.
+export RUN_ID=${RUN_ID:-$(date +%Y%m%d_%H%M%S)}
+mkdir -p logs
+
+export QUESTION="In which quarter did EPAM Systems Inc. have the lowest GAAP gross margin from 2021 to mid-2022?"
+export OLLAMA_BASE_URL=http://localhost:11434
+```
+
+#### Query Case 1: Graph Config Default
+
+```bash
+export CASE=compare_config_default_1doc
+export OUT=outputs/${CASE}
+export QUERY_LOG=logs/query_${CASE}_${RUN_ID}.txt
+
+python -u query_graph.py \
+  --working_dir ./${OUT} \
+  --mode local \
+  --question "$QUESTION" \
+  2>&1 | tee ${QUERY_LOG}
+```
+
+#### Query Case 2: Graph Gemini Explicit
+
+```bash
+export CASE=compare_gemini_ollama_embed_1doc
+export OUT=outputs/${CASE}
+export QUERY_LOG=logs/query_${CASE}_${RUN_ID}.txt
+
+python -u query_graph.py \
+  --provider gemini \
+  --model gemini-2.5-flash \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --working_dir ./${OUT} \
+  --mode local \
+  --question "$QUESTION" \
+  2>&1 | tee ${QUERY_LOG}
+```
+
+#### Query Case 3: Graph Ollama Native
+
+```bash
+export CASE=compare_ollama_qwen3_14b_1doc
+export OUT=outputs/${CASE}
+export QUERY_LOG=logs/query_${CASE}_${RUN_ID}.txt
+
+python -u query_graph.py \
+  --local_llm_backend ollama \
+  --model qwen3:14b \
+  --base_url http://localhost:11434 \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --llm_max_async 1 \
+  --llm_timeout 600 \
+  --working_dir ./${OUT} \
+  --mode local \
+  --question "$QUESTION" \
+  2>&1 | tee ${QUERY_LOG}
+```
+
+#### Query Case 4: Graph TurboQuant
+
+```bash
+export CASE=compare_turboquant_qwen25_7b_1doc
+export OUT=outputs/${CASE}
+export QUERY_LOG=logs/query_${CASE}_${RUN_ID}.txt
+
+export OPENAI_BASE_URL=http://localhost:8080/v1
+export OPENAI_API_KEY=sk-local
+export OLLAMA_BASE_URL=http://localhost:11434
+
+python -u query_graph.py \
+  --local_llm_backend turboquant \
+  --model qwen2.5-7b-instruct-q8-turbo3 \
+  --base_url http://localhost:8080/v1 \
+  --embedding_provider ollama \
+  --embedding_base_url http://localhost:11434 \
+  --llm_max_async 1 \
+  --llm_timeout 600 \
+  --working_dir ./${OUT} \
+  --mode local \
+  --question "$QUESTION" \
+  2>&1 | tee ${QUERY_LOG}
+```
+
+Kiểm query logs:
+
+```bash
+grep -E "\[query-detail\]|\[timer\]|ERROR|Exception" logs/query_compare_*_1doc_${RUN_ID}.txt
+```
+
+### Bảng Tham Số CLI Cho Build Và Query
+
+| Tham số | Dùng ở đâu | Ý nghĩa | Khi nào dùng | Mặc định nếu không truyền |
+|---|---|---|---|---|
+| `--local_llm_backend turboquant` | Build/query | Ép LLM đi qua local `llama-server` OpenAI-compatible `/v1`. | Benchmark TurboQuant. | Không tự bật. |
+| `--local_llm_backend ollama` | Build/query | Ép LLM đi qua Ollama native API. | Benchmark local LLM không TurboQuant. | Không tự bật. |
+| `--provider` | Build/query | Override provider trực tiếp, ví dụ `gemini`, `openai`, `ollama`. | Khi muốn chạy explicit theo provider thay vì local backend shortcut. | Đọc từ config. |
+| `--model` | Build/query | Tên model hoặc alias. Với TurboQuant phải khớp `llama-server --alias`. | Khi đổi model/alias. | TurboQuant: `qwen2.5-7b-instruct-q8-turbo3`; Ollama: `qwen3:14b`; không backend: đọc config. |
+| `--base_url` | Build/query | Endpoint chat LLM. | Khi dùng local endpoint hoặc endpoint custom. | TurboQuant: `http://localhost:8080/v1`; Ollama: `http://localhost:11434`; không backend: đọc env/config. |
+| `--embedding_provider` | Build/query | Provider embedding. | Thường dùng `ollama` để giữ baseline embedding. | Đọc config. |
+| `--embedding_base_url` | Build/query | Endpoint embedding. | Nên truyền khi dùng local embedding để tránh nhầm endpoint LLM. | Thường là `http://localhost:11434`. |
+| `--llm_max_async` | Build/query | Số request LLM đồng thời từ client GraphRAG. | Giảm xuống `1` để local LLM ổn định; tăng để test throughput. | TurboQuant shortcut: `1`; không backend: default GraphRAG/config. |
+| `--llm_timeout` | Build/query | Timeout mỗi request LLM. | Local model sinh lâu nên dùng `600`. | TurboQuant shortcut: `600`; OpenAI-compatible fallback cũ: `120`. |
+| `--output_dir` | Build | Folder lưu graph build. | Mỗi backend/model nên có output riêng, ví dụ `outputs/compare_turboquant_qwen25_7b_1doc`. | Theo config hoặc argument cũ. |
+| `--working_dir` | Query | Folder graph đã build. | Query graph tương ứng với backend/model đã build. | Theo config hoặc argument cũ. |
+| `--mode` | Query | Chế độ query, ví dụ `local` hoặc `global`. | Chọn workflow retrieval. | Theo CLI/config query. |
+| `--question` | Query | Câu hỏi cần chạy. | Query single question. | Bắt buộc cho query single. |
+
+### Bảng Tham Số llama-server Quan Trọng
+
+| Tham số | Ý nghĩa | Ghi chú benchmark |
+|---|---|---|
+| `-m PATH` | Đường dẫn model GGUF được load. | Đây là model LLM thật sự server chạy. |
+| `--alias NAME` | Tên model expose qua `/v1/models`. | `build_graph.py --model` phải khớp alias này. |
+| `--host 127.0.0.1` | Bind server local-only. | Dùng local benchmark an toàn. |
+| `--port 8080` | Port server. | `--base_url` phải là `http://localhost:8080/v1`. |
+| `-ctk q8_0` | Kiểu KV cache cho Key. | `q8_0` là mốc an toàn/chất lượng hơn. |
+| `-ctv turbo3` | Kiểu KV cache cho Value. | Đây là phần TurboQuant nén V cache để tiết kiệm VRAM/context. |
+| `-ctk q8_0 -ctv q8_0` | KV cache baseline không TurboQuant V. | Dùng làm mốc so sánh chất lượng/tốc độ. |
+| `-ctk turbo3 -ctv turbo3` | Nén cả K và V. | Nén mạnh hơn, cần kiểm chất lượng bằng PPL/NIAH. |
+| `-fa on` hoặc `-fa 1` | Bật flash attention. | Thường cần cho context dài và hiệu năng GPU. |
+| `-ngl 99` | Số layer offload lên GPU. | `99` thường có nghĩa offload tối đa nếu VRAM đủ. |
+| `-c 32768` | Context runtime của server. | Không được vượt quá khả năng model/VRAM; context lớn tốn KV cache. |
+| `--parallel N` | Số slot request song song. | Nếu set `--parallel 1`, nên dùng `--llm_max_async 1` phía client. |
+| `--log-file PATH` | Ghi log server ra file. | Cần để grep `POST /v1/chat/completions`. |
+
+Ghi chú context theo các model bạn đang dùng:
+
+| Model GGUF | Context train/khả năng đã ghi nhận | Ghi chú |
+|---|---:|---|
+| Qwen2.5 7B Instruct Q8 | 131k | Phù hợp test context dài hơn trong giới hạn VRAM. |
+| Qwen3 14B Q5_0 | Khoảng 64k theo ghi chú benchmark của bạn | Nặng hơn, decode lâu hơn 7B. |
+| Qwen3 14B Q8_0 | Khoảng 10k theo ghi chú benchmark của bạn | Q8 tốn VRAM hơn, context thực tế thấp hơn. |
+
+### Lệnh Kiểm Tra Riêng Cho llama-server/TurboQuant
+
+Các lệnh này kiểm riêng backend `llama-cpp-turboquant`; chúng không build graph. Dùng trước để hiểu tốc độ, chất lượng và khả năng context của model/KV cache.
+
+#### Speed & Throughput bằng llama-bench
+
+Prefill là tốc độ nạp prompt/context. Decode là tốc độ sinh token. GraphRAG build thường tốn nhiều decode vì LLM phải sinh JSON extraction và summary.
+
+```bash
+cd /home/guest/Projects/Research/llama-cpp-turboquant
+conda activate turboquant
+
+./build/bin/llama-bench \
+  -m models/qwen3.5-27b-config-i.gguf \
+  -fa 1 \
+  -ngl 99 \
+  -p 512 \
+  -n 128
+```
+
+So sánh KV cache baseline `q8_0/q8_0` với TurboQuant `turbo3/turbo3` ở context dài:
+
+```bash
+# Baseline KV q8_0 ở 8K và 32K
+./build/bin/llama-bench -m model.gguf -ctk q8_0 -ctv q8_0 -fa 1 -p 8192 -r 1
+./build/bin/llama-bench -m model.gguf -ctk q8_0 -ctv q8_0 -fa 1 -p 32768 -r 1
+
+# TurboQuant KV turbo3 ở 8K và 32K
+./build/bin/llama-bench -m model.gguf -ctk turbo3 -ctv turbo3 -fa 1 -p 8192 -r 1
+./build/bin/llama-bench -m model.gguf -ctk turbo3 -ctv turbo3 -fa 1 -p 32768 -r 1
+```
+
+#### Quality/PPL bằng llama-perplexity
+
+PPL dùng để kiểm mức lệch chất lượng khi đổi kiểu nén KV cache.
+
+```bash
+# Không đối xứng, thường an toàn hơn: K q8_0, V turbo3
+./build/bin/llama-perplexity \
+  -m model.gguf \
+  -ctk q8_0 \
+  -ctv turbo3 \
+  -fa on \
+  -ngl 99 \
+  -f wiki.test.raw \
+  -c 1024 \
+  --chunks 20
+
+# Đối xứng, nén mạnh hơn: K turbo3, V turbo3
+./build/bin/llama-perplexity \
+  -m model.gguf \
+  -ctk turbo3 \
+  -ctv turbo3 \
+  -fa on \
+  -ngl 99 \
+  -f wiki.test.raw \
+  -c 512 \
+  --chunks 20
+```
+
+#### Needle-In-A-Haystack và Skip Rate
+
+NIAH kiểm khả năng truy xuất thông tin trong ngữ cảnh dài. Skip rate giúp đánh giá hành vi sparse/nén V cache.
+
+```bash
+python3 scripts/niah_test.py --model models/your-model.gguf --ctx 32768
+python3 scripts/measure_skip_rate.py --model models/your-model.gguf
+```
+
+#### REFRACT Acid-test
+
+REFRACT dùng để kiểm sâu độ lệch giữa cấu hình nén và baseline.
+
+```bash
+python3 -m refract.cli selftest --backend auto --model path/to/model.gguf
+
+python3 -m refract.cli score \
+  --model model.gguf \
+  --candidate "ctk=q8_0,ctv=turbo4" \
+  --corpus wiki.test.raw \
+  --html-out report.html
+
+python3 -m refract.cli score \
+  --model model.gguf \
+  --candidate "ctk=q8_0,ctv=turbo3" \
+  --full
+```

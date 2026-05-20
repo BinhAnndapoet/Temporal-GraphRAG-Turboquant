@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import json
 import asyncio
+import time
 from typing import Union, List, Optional, Dict, Any
 from collections import Counter, defaultdict
 import logging
@@ -793,6 +794,21 @@ async def extract_entities(
     already_entities = 0
     already_relations = 0
 
+    detail_total_start = time.perf_counter()
+    detail_stage_start = detail_total_start
+
+    def mark_detail(label: str) -> None:
+        nonlocal detail_stage_start
+        now = time.perf_counter()
+        print(
+            f"[build-detail] {label}: {now - detail_stage_start:.2f}s "
+            f"(total {now - detail_total_start:.2f}s)",
+            flush=True,
+        )
+        detail_stage_start = now
+
+    print(f"[build-detail] extract_entities started: chunks={len(ordered_chunks)}", flush=True)
+
     async def _process_single_content(chunk_key_dp: tuple[str, TextChunkSchema]):
         nonlocal already_processed, already_entities, already_relations
         chunk_key = chunk_key_dp[0]
@@ -1060,6 +1076,7 @@ Output:"""
         *[_process_single_content(c) for c in ordered_chunks]
     )
     print()  # clear the progress bar
+    mark_detail("chunk LLM extraction + parsing")
     logger.info("Entity extraction completed. Processing extracted data...")
     maybe_nodes = defaultdict(list)
     maybe_edges = defaultdict(list)
@@ -1070,6 +1087,7 @@ Output:"""
             # it's undirected graph
             sorted_k = (k[0],) + tuple(sorted(k[1:]))
             maybe_edges[sorted_k].extend(v)
+    mark_detail(f"aggregate extracted records: entities={len(maybe_nodes)}, relations={len(maybe_edges)}")
 
     # Separate temporal and non-temporal entities
     temporal_entities = {}
@@ -1109,11 +1127,16 @@ Output:"""
     logger.info(f"Non-temporal entities: {len(non_temporal_entities)}")
     logger.info(f"Entities for entity relation graph: {len(entities_for_entity_graph)}")
     logger.info(f"Found {len(maybe_nodes)} unique entities and {len(maybe_edges)} unique relations")
+    mark_detail(
+        f"split/filter entities: temporal={len(temporal_entities)}, "
+        f"non_temporal={len(non_temporal_entities)}, graph_entities={len(entities_for_entity_graph)}"
+    )
     
     # Convert relationships to explicit temporal quadruples (v₁, v₂, e, τ)
     # This aligns with the paper's methodology
     temporal_quadruples = _convert_to_temporal_quadruples(maybe_edges, maybe_nodes)
     logger.info(f"Extracted {len(temporal_quadruples)} temporal quadruples from relationships")
+    mark_detail(f"convert temporal quadruples: {len(temporal_quadruples)}")
     
     logger.info(f"Starting entity merging and graph upsert for {len(entities_for_entity_graph)} entities (filtered for entity relation graph)...")
     
@@ -1123,8 +1146,10 @@ Output:"""
     
     entity_items = list(entities_for_entity_graph.items())
     total_batches = (len(entity_items) + batch_size - 1) // batch_size
+    print(f"[build-detail] entity merge/upsert batches started: {total_batches} batches, batch_size={batch_size}", flush=True)
     
     for batch_idx in range(total_batches):
+        batch_start = time.perf_counter()
         start_idx = batch_idx * batch_size
         end_idx = min(start_idx + batch_size, len(entity_items))
         batch_items = entity_items[start_idx:end_idx]
@@ -1148,6 +1173,12 @@ Output:"""
         all_entities_data.extend(valid_results)
         
         logger.info(f"Completed entity batch {batch_idx + 1}/{total_batches} ({len(valid_results)} valid entities)")
+        print(
+            f"[build-detail] entity batch {batch_idx + 1}/{total_batches}: "
+            f"{time.perf_counter() - batch_start:.2f}s valid={len(valid_results)} cumulative={len(all_entities_data)}",
+            flush=True,
+        )
+    mark_detail(f"entity merge/upsert batches complete: entities={len(all_entities_data)}")
     
     logger.info(f"Entity merging completed. Starting relation processing for {len(maybe_edges)} relations...")
 
@@ -1157,8 +1188,10 @@ Output:"""
     
     relation_items = list(maybe_edges.items())
     total_relation_batches = (len(relation_items) + relation_batch_size - 1) // relation_batch_size
+    print(f"[build-detail] relation merge/upsert batches started: {total_relation_batches} batches, batch_size={relation_batch_size}", flush=True)
     
     for batch_idx in range(total_relation_batches):
+        batch_start = time.perf_counter()
         start_idx = batch_idx * relation_batch_size
         end_idx = min(start_idx + relation_batch_size, len(relation_items))
         batch_items = relation_items[start_idx:end_idx]
@@ -1182,6 +1215,12 @@ Output:"""
         all_relations_data.extend(valid_results)
         
         logger.info(f"Completed relation batch {batch_idx + 1}/{total_relation_batches} ({len(valid_results)} valid relations)")
+        print(
+            f"[build-detail] relation batch {batch_idx + 1}/{total_relation_batches}: "
+            f"{time.perf_counter() - batch_start:.2f}s valid={len(valid_results)} cumulative={len(all_relations_data)}",
+            flush=True,
+        )
+    mark_detail(f"relation merge/upsert batches complete: relations={len(all_relations_data)}")
 
     total_relations = len(all_relations_data)
     none_relations = sum(1 for dp in all_relations_data if dp is None)
@@ -1213,11 +1252,14 @@ Output:"""
             for dp in all_entities_data
         }
         
+        mark_detail(f"prepare entity vector payloads: entities={len(data_for_vdb)}")
         logger.info(f"Upserting {len(data_for_vdb)} entities to entity_vdb...")
         await entity_vdb.upsert(data_for_vdb)
+        mark_detail(f"entity_vdb upsert: entities={len(data_for_vdb)}")
         
         logger.info(f"Upserting {len(data_for_vdb_new)} new entities to entity_vdb_new...")
         await entity_vdb_new.upsert(data_for_vdb_new)
+        mark_detail(f"entity_vdb_new upsert: entities={len(data_for_vdb_new)}")
     if relation_vdb is not None:
         valid_relations_data = [dp for dp in all_relations_data if dp is not None]
         data_for_vdb_relation = {
@@ -1227,8 +1269,11 @@ Output:"""
             }
             for dp in valid_relations_data for timestamp, des in dp.get('description', {}).items()
         }
+        mark_detail(f"prepare relation vector payloads: relations={len(data_for_vdb_relation)}")
         await relation_vdb.upsert(data_for_vdb_relation)
+        mark_detail(f"relation_vdb upsert: relations={len(data_for_vdb_relation)}")
 
+    mark_detail("extract_entities total")
     logger.info("Entity extraction and graph building completed successfully!")
     return knwoledge_graph_inst, maybe_hierarchy_node_names, temporal_quadruples
 
@@ -1824,8 +1869,10 @@ async def generate_community_report(
 
     levels = sorted(set([c["level"] for c in community_values]), reverse=True)
     logger.info(f"Generating by levels: {levels}")
+    print(f"[build-detail] temporal community levels: {levels}", flush=True)
     community_datas = {}
     for level in levels:
+        level_start = time.perf_counter()
         this_level_community_keys, this_level_community_values = zip(
             *[
                 (k, v)
@@ -1833,6 +1880,7 @@ async def generate_community_report(
                 if v["level"] == level
             ]
         )
+        print(f"[build-detail] temporal community level {level} started: communities={len(this_level_community_values)}", flush=True)
         this_level_communities_reports = await asyncio.gather(
             *[
                 _form_single_community_report(c, community_datas)
@@ -1872,11 +1920,26 @@ async def generate_temporal_report(
 
     community_report_prompt = PROMPTS["community_report"]
 
+    report_total_start = time.perf_counter()
+    report_stage_start = report_total_start
+
+    def mark_report(label: str) -> None:
+        nonlocal report_stage_start
+        now = time.perf_counter()
+        print(
+            f"[build-detail] {label}: {now - report_stage_start:.2f}s "
+            f"(total {now - report_total_start:.2f}s)",
+            flush=True,
+        )
+        report_stage_start = now
+
+    print("[build-detail] temporal community report generation started", flush=True)
     communities_schema = await temporal_hierarchy_graph_inst.temporal_hierarchy(
         entity_relation_graph_inst=knowledge_graph_inst)
     community_keys, community_values = list(communities_schema.keys()), list(
         communities_schema.values()
     )
+    mark_report(f"build temporal community schema: communities={len(community_values)}")
     already_processed = 0
 
     async def _form_single_timestamp_report(
@@ -1963,8 +2026,10 @@ async def generate_temporal_report(
 
     levels = sorted(set([c["level"] for c in community_values]), reverse=True)
     logger.info(f"Generating by levels: {levels}")
+    print(f"[build-detail] temporal community levels: {levels}", flush=True)
     community_datas = {}
     for level in levels:
+        level_start = time.perf_counter()
         this_level_community_keys, this_level_community_values = zip(
             *[
                 (k, v)
@@ -1972,6 +2037,7 @@ async def generate_temporal_report(
                 if v["level"] == level
             ]
         )
+        print(f"[build-detail] temporal community level {level} started: communities={len(this_level_community_values)}", flush=True)
         this_level_communities_reports = await asyncio.gather(
             *[
                 _form_single_timestamp_report(c, community_datas)
@@ -1993,8 +2059,15 @@ async def generate_temporal_report(
             )
             }
         )
+        print(
+            f"[build-detail] temporal community level {level}: "
+            f"{time.perf_counter() - level_start:.2f}s communities={len(this_level_community_values)}",
+            flush=True,
+        )
     print()  # clear the progress bar
+    mark_report(f"generate temporal community reports: reports={len(community_datas)}")
     await community_report_kv.upsert(community_datas)
+    mark_report(f"upsert temporal community reports: reports={len(community_datas)}")
 
 
 # Export aliases for backward compatibility

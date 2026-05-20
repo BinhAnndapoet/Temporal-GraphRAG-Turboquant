@@ -8,6 +8,7 @@ embeddings as numeric arrays for better performance compared to base64 encoding.
 import asyncio
 import os
 import json
+import time
 import numpy as np
 from dataclasses import dataclass
 from typing import Dict, List, Any
@@ -91,7 +92,9 @@ class NanoVectorDBStorage(BaseVectorStorage):
             logger.warning("You insert an empty data to vector DB")
             return []
         
+        total_start = time.perf_counter()
         logger.info(f"Processing {len(data)} items in batches of {self._max_batch_size}...")
+        print(f"[build-detail] vector upsert started: namespace={self.namespace} items={len(data)}", flush=True)
         
         list_data = [
             {
@@ -106,12 +109,24 @@ class NanoVectorDBStorage(BaseVectorStorage):
             contents[i : i + self._max_batch_size]
             for i in range(0, len(contents), self._max_batch_size)
         ]
+        prep_done = time.perf_counter()
+        print(
+            f"[build-detail] vector payload prep ({self.namespace}): "
+            f"{prep_done - total_start:.2f}s batches={len(batches)} batch_size={self._max_batch_size}",
+            flush=True,
+        )
         
         logger.info(f"Generating embeddings for {len(batches)} batches...")
         embeddings_list = await asyncio.gather(
             *[self.embedding_func(batch) for batch in batches]
         )
         logger.info(f"Completed embedding generation for {len(embeddings_list)} batches")
+        embed_done = time.perf_counter()
+        print(
+            f"[build-detail] vector embedding generation ({self.namespace}): "
+            f"{embed_done - prep_done:.2f}s batches={len(embeddings_list)}",
+            flush=True,
+        )
         embeddings = np.concatenate(embeddings_list)
         
         # Store data and embeddings separately
@@ -119,6 +134,11 @@ class NanoVectorDBStorage(BaseVectorStorage):
             doc_id = d["__id__"]
             self._data[doc_id] = d
             self._embeddings[doc_id] = embeddings[i]
+        print(
+            f"[build-detail] vector in-memory store ({self.namespace}): "
+            f"{time.perf_counter() - embed_done:.2f}s (total {time.perf_counter() - total_start:.2f}s)",
+            flush=True,
+        )
         
         return list_data
 

@@ -4,8 +4,10 @@ graph_output/*
 *__pycache__*
 .env
 evaluation/*
+logs/
+outputs/
 
-*.json
+# *.json
 *.log
 *.ipynb
 

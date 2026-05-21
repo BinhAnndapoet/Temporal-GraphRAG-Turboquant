@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from functools import partial
@@ -389,7 +390,21 @@ class TemporalGraphRAG:
         Args:
             dict_or_dicts: Document(s) in format {"title": "", "doc": ""}
         """
+        build_total_start = time.perf_counter()
+        build_stage_start = build_total_start
+
+        def mark_stage(label: str) -> None:
+            nonlocal build_stage_start
+            now = time.perf_counter()
+            print(
+                f"[build-stage] {label}: {now - build_stage_start:.2f}s "
+                f"(total {now - build_total_start:.2f}s)",
+                flush=True,
+            )
+            build_stage_start = now
+
         await self._insert_start()
+        mark_stage("storage start callbacks")
         try:
             if isinstance(dict_or_dicts, dict):
                 dict_or_dicts = [dict_or_dicts]
@@ -404,6 +419,7 @@ class TemporalGraphRAG:
                 logger.warning(f"All docs are already in the storage")
                 return
             logger.info(f"[New Docs] inserting {len(new_doc_dicts)} docs")
+            print(f"[build-stage] new documents: {len(new_doc_dicts)}", flush=True)
 
             # ---------- chunking
             inserting_chunks = get_chunks(
@@ -423,9 +439,12 @@ class TemporalGraphRAG:
                 logger.warning(f"All chunks are already in the storage")
                 return
             logger.info(f"[New Chunks] inserting {len(inserting_chunks)} chunks")
+            print(f"[build-stage] new chunks: {len(inserting_chunks)}", flush=True)
+            mark_stage("document hashing + chunking")
             if self.enable_naive_rag:
                 logger.info("Insert chunks for naive RAG")
                 await self.chunks_vdb.upsert(inserting_chunks)
+                mark_stage("naive chunk vector upsert")
 
             # Initialize variable for community preservation
             existing_communities = []
@@ -441,6 +460,7 @@ class TemporalGraphRAG:
             else:
                 logger.info("[Standard Mode] Dropping all existing community summaries")
                 await self.community_reports.drop()
+            mark_stage("community report cache policy")
 
             # ---------- extract/summary entity and upsert to graph
             logger.info("[Entity Extraction]...")
@@ -465,20 +485,24 @@ class TemporalGraphRAG:
                 logger.warning("No new entities found")
                 return
             self.chunk_entity_relation_graph = maybe_new_kg
+            mark_stage("entity extraction + graph/vector upserts")
             
             # ---------- update clusterings of graph
             logger.info("[Building Temporal Hierarchy]...")
             logger.info(f"Found {len(maybe_new_hierarchy_node_names)} new hierarchy node names")
+            print(f"[build-stage] temporal hierarchy nodes to update: {len(maybe_new_hierarchy_node_names)}", flush=True)
 
             await self.building_temporal_hierarchy_func(
                 maybe_new_hierarchy_node_names,
                 temporal_hierarchy_graph_inst=self.temporal_hierarchy_graph,
                 knowledge_graph_inst=self.chunk_entity_relation_graph
             )
+            mark_stage("temporal hierarchy build")
 
             # Generate community reports only if enabled
             if self.enable_community_summary:
                 logger.info("[Generating Community Reports]...")
+                print("[build-stage] community report generation started", flush=True)
                 await generate_temporal_report(
                     self.community_reports,
                     knowledge_graph_inst=self.chunk_entity_relation_graph,
@@ -490,17 +514,21 @@ class TemporalGraphRAG:
                 if self.enable_incremental and self.preserve_communities:
                     logger.info("[Incremental Mode] Restoring preserved community summaries...")
                     logger.info(f"Would restore {len(existing_communities)} preserved community summaries")
+                mark_stage("community report generation")
             else:
                 logger.info("[Community Reports] Skipped (disabled in configuration)")
+                mark_stage("community report generation")
 
             logger.info("[Finalizing Storage Operations]...")
             # ---------- commit upsertings and indexing
             await self.full_docs.upsert(new_doc_dicts)
             await self.text_chunks.upsert(inserting_chunks)
+            mark_stage("full docs + text chunks upsert")
 
         finally:
             # Call _insert_done only once at the end to persist all changes
             await self._insert_done()
+            mark_stage("persist all storages")
 
     async def _insert_start(self):
         """Call index_start_callback on all storage instances."""

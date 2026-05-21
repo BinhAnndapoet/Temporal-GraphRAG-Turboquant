@@ -36,13 +36,21 @@ def get_api_key_for_provider(provider: str) -> Optional[str]:
         return None
 
 
-def create_llm_function(provider: str, model: str, api_key: Optional[str] = None, base_url: Optional[str] = None):
+def create_llm_function(
+    provider: str,
+    model: str,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    timeout: Optional[float] = None,
+):
     """Create LLM completion function based on provider."""
     kwargs = {}
     if api_key:
         kwargs['api_key'] = api_key
     if base_url:
         kwargs['base_url'] = base_url
+    if timeout:
+        kwargs['timeout'] = timeout
     
     return create_provider_complete_function(
         provider=provider,
@@ -252,7 +260,13 @@ def create_temporal_graphrag_from_config(
             resolved_embedding_base_url = os.getenv('OLLAMA_BASE_URL')
     
     # Create LLM and embedding functions
-    llm_func = create_llm_function(provider, model, api_key=api_key, base_url=base_url)
+    llm_func = create_llm_function(
+        provider,
+        model,
+        api_key=api_key,
+        base_url=base_url,
+        timeout=config.get('llm_timeout'),
+    )
     embedding_func = create_embedding_function(
         embedding_provider=embedding_provider, 
         api_key=embedding_api_key, 
@@ -270,6 +284,10 @@ def create_temporal_graphrag_from_config(
         embedding_func=embedding_func,
         best_model_func=llm_func,
         cheap_model_func=llm_func,  # Use same model for both
+        best_model_max_token_size=config.get('best_model_max_token_size', 65536),
+        best_model_max_async=config.get('best_model_max_async', 32),
+        cheap_model_max_token_size=config.get('cheap_model_max_token_size', 32768),
+        cheap_model_max_async=config.get('cheap_model_max_async', 32),
         enable_llm_cache=config.get('enable_llm_cache', True),
         always_create_working_dir=True,
         enable_community_summary=config.get('enable_community_summary', True),

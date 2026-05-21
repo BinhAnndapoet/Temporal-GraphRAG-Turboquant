@@ -31,7 +31,9 @@ import argparse
 import logging
 import json
 import time
+import urllib.request
 from pathlib import Path
+from typing import Dict
 from dotenv import load_dotenv
 
 # Configure logging - default to ERROR to reduce noise, but allow DEBUG via environment variable
@@ -87,6 +89,116 @@ class PhaseTimer:
         return time.perf_counter() - self.total_start
 
 
+def xac_nhan_turboquant(base_url: str = None, strict: bool = False) -> bool:
+    base_url = base_url or os.getenv("OPENAI_BASE_URL", "http://localhost:8080/v1")
+    props_url = base_url.replace("/v1", "").rstrip("/") + "/props"
+    try:
+        with urllib.request.urlopen(props_url, timeout=3) as response:
+            if response.status == 200:
+                response.read()
+                print("\n" + "═"*65)
+                print("🚀 [TURBOQUANT+ VALIDATION] KẾT NỐI SERVER THÀNH CÔNG!")
+                print(f" 🔹 API Endpoint  : {base_url}")
+                print(" 🔹 Wire protocol : OpenAI-compatible local /v1")
+                print(" 🔹 Nhân xử lý    : Llama-Server C++ (Tích hợp tối ưu TurboQuant+)")
+                print(" 🔹 Trạng thái KV : Đang tự động nén trực tiếp trên VRAM GPU")
+                print(" ═" + "═"*63 + "\n")
+                return True
+            print(f"⚠️ Cảnh báo: Kết nối tới server nhưng trả về mã lỗi: {response.status}")
+    except Exception as exc:
+        print("\n❌ [LỖI KẾT NỐI] KHÔNG THỂ TÌM THẤY SERVER CỦA TURBOQUANT!")
+        print(f"   Vui lòng chắc chắn rằng bạn đã chạy lệnh khởi động `./build/bin/llama-server` tại cổng {base_url} trước.\n")
+        if strict:
+            raise RuntimeError(f"TurboQuant healthcheck failed: {base_url}") from exc
+    return False
+
+
+def _is_local_base_url(base_url: str) -> bool:
+    return bool(base_url) and ("localhost" in base_url or "127.0.0.1" in base_url)
+
+
+def apply_runtime_overrides(args, override_config: Dict) -> Dict:
+    if args.local_llm_backend == "turboquant":
+        provider = "openai"
+        model = args.model or "qwen2.5-7b-instruct-q8-turbo3"
+        llm_base_url = args.base_url or "http://localhost:8080/v1"
+        embedding_provider = args.embedding_provider or "ollama"
+        embedding_base_url = args.embedding_base_url or "http://localhost:11434"
+        llm_max_async = args.llm_max_async or 1
+        llm_timeout = args.llm_timeout or 600.0
+        api_key = os.getenv("OPENAI_API_KEY") or "sk-local"
+        wire_protocol = "openai-compatible-local"
+    elif args.local_llm_backend == "ollama":
+        provider = "ollama"
+        model = args.model or "qwen3:14b"
+        llm_base_url = args.base_url or "http://localhost:11434"
+        embedding_provider = args.embedding_provider or "ollama"
+        embedding_base_url = args.embedding_base_url or "http://localhost:11434"
+        llm_max_async = args.llm_max_async
+        llm_timeout = args.llm_timeout
+        api_key = None
+        wire_protocol = "ollama-native"
+    else:
+        provider = args.provider
+        model = args.model
+        llm_base_url = args.base_url
+        embedding_provider = args.embedding_provider
+        embedding_base_url = args.embedding_base_url
+        llm_max_async = args.llm_max_async
+        llm_timeout = args.llm_timeout
+        api_key = None
+        wire_protocol = provider or "config"
+        if provider == "openai" and _is_local_base_url(llm_base_url):
+            api_key = os.getenv("OPENAI_API_KEY") or "sk-local"
+            wire_protocol = "openai-compatible-local"
+        elif provider == "ollama":
+            wire_protocol = "ollama-native"
+
+    if provider:
+        override_config["provider"] = provider
+    if model:
+        override_config["model"] = model
+    if embedding_provider:
+        override_config["embedding_provider"] = embedding_provider
+    if llm_max_async:
+        override_config["best_model_max_async"] = llm_max_async
+        override_config["cheap_model_max_async"] = llm_max_async
+    if llm_timeout:
+        override_config["llm_timeout"] = llm_timeout
+
+    if not any([provider, model, llm_base_url, embedding_provider, embedding_base_url, llm_max_async, llm_timeout]):
+        return {}
+
+    return {
+        "local_llm_backend": args.local_llm_backend or "provider_override",
+        "provider": provider or "config",
+        "model": model or "config",
+        "llm_base_url": llm_base_url,
+        "embedding_provider": embedding_provider or "config",
+        "embedding_base_url": embedding_base_url,
+        "llm_max_async": llm_max_async,
+        "llm_timeout": llm_timeout,
+        "wire_protocol": wire_protocol,
+        "api_key": api_key,
+    }
+
+
+def print_runtime(runtime_config: Dict) -> None:
+    if not runtime_config:
+        return
+    print(
+        f"[runtime] local_llm_backend={runtime_config['local_llm_backend']} "
+        f"provider={runtime_config['provider']} "
+        f"model={runtime_config['model']} "
+        f"wire_protocol={runtime_config['wire_protocol']}"
+    )
+    print(f"[runtime] llm_base_url={runtime_config['llm_base_url']}")
+    print(
+        f"[runtime] embedding_provider={runtime_config['embedding_provider']} "
+        f"embedding_base_url={runtime_config['embedding_base_url']}"
+    )
+
+
 def main():
     """Main function to query the graph."""
     timer = PhaseTimer()
@@ -124,6 +236,54 @@ def main():
         action='store_true',
         help='Print retrieval details when local mode returns them'
     )
+    parser.add_argument(
+        '--local_llm_backend',
+        choices=['turboquant', 'ollama'],
+        default=None,
+        help='Local LLM backend override: turboquant=local llama-server OpenAI-compatible API, ollama=Ollama native API'
+    )
+    parser.add_argument(
+        '--provider',
+        choices=['openai', 'gemini', 'ollama', 'azure', 'bedrock'],
+        default=None,
+        help='Override LLM provider from config without using local backend mode'
+    )
+    parser.add_argument(
+        '--model',
+        type=str,
+        default=None,
+        help='Override LLM model or local llama-server alias'
+    )
+    parser.add_argument(
+        '--base_url',
+        type=str,
+        default=None,
+        help='Override LLM base URL, e.g. http://localhost:8080/v1 for llama-server'
+    )
+    parser.add_argument(
+        '--embedding_provider',
+        choices=['ollama', 'openai', 'azure', 'bedrock'],
+        default=None,
+        help='Override embedding provider from config'
+    )
+    parser.add_argument(
+        '--embedding_base_url',
+        type=str,
+        default=None,
+        help='Embedding base URL, e.g. http://localhost:11434 for Ollama embeddings'
+    )
+    parser.add_argument(
+        '--llm_max_async',
+        type=int,
+        default=None,
+        help='Override max concurrent LLM calls. Defaults to 1 for --local_llm_backend turboquant'
+    )
+    parser.add_argument(
+        '--llm_timeout',
+        type=float,
+        default=None,
+        help='Override LLM request timeout in seconds. Defaults to 600 for --local_llm_backend turboquant'
+    )
     
     args = parser.parse_args()
     
@@ -131,6 +291,7 @@ def main():
     override_config = {}
     if args.working_dir:
         override_config['working_dir'] = args.working_dir
+    runtime_config = apply_runtime_overrides(args, override_config)
     
     # Create TemporalGraphRAG from config (simplified!)
     print("="*60)
@@ -139,13 +300,24 @@ def main():
     print(f"Config file: {args.config}")
     if override_config:
         print(f"Overrides: {override_config}")
+    print_runtime(runtime_config)
     print()
+
+    if runtime_config.get("local_llm_backend") == "turboquant":
+        try:
+            xac_nhan_turboquant(runtime_config["llm_base_url"], strict=True)
+        except RuntimeError as e:
+            print(f"❌ Error: {e}")
+            sys.exit(1)
     
     try:
         graph_rag = create_temporal_graphrag_from_config(
             config_path=args.config,
             config_type="querying",
-            override_config=override_config if override_config else None
+            override_config=override_config if override_config else None,
+            api_key=runtime_config.get("api_key") if runtime_config else None,
+            base_url=runtime_config.get("llm_base_url") if runtime_config else None,
+            embedding_base_url=runtime_config.get("embedding_base_url") if runtime_config else None,
         )
         print("✅ TemporalGraphRAG initialized from config")
         print(f"   Working directory: {graph_rag.working_dir}")

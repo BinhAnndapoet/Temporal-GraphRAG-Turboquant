@@ -62,8 +62,9 @@ async def openai_complete_if_cache(
         logger.debug(f"[{request_id}] Cache miss")
     
     # Make API call
+    request_timeout = kwargs.pop("timeout", 120.0)
     response = await openai_client.chat.completions.create(
-        model=model, messages=messages, timeout=120.0, **kwargs
+        model=model, messages=messages, timeout=request_timeout, **kwargs
     )
     
     response_text = response.choices[0].message.content
@@ -485,9 +486,12 @@ def create_provider_complete_function(
         **kwargs
     ) -> str:
         if provider == "openai":
-            # Extract api_key and base_url from provider_kwargs or kwargs
+            # Extract api_key/base_url/timeout from provider kwargs or call kwargs.
             api_key = kwargs.pop("api_key", provider_kwargs.get("api_key"))
             base_url = kwargs.pop("base_url", provider_kwargs.get("base_url"))
+            timeout = kwargs.pop("timeout", provider_kwargs.get("timeout"))
+            if timeout is not None:
+                kwargs["timeout"] = timeout
             return await openai_complete_if_cache(
                 model, prompt, system_prompt, history_messages, hashing_kv,
                 api_key=api_key, base_url=base_url, **kwargs

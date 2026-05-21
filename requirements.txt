@@ -33,3 +33,5 @@ python-dateutil>=2.8.0
 
 # AWS Bedrock (optional - only needed for Amazon Bedrock provider)
 # aioboto3>=11.0.0
+
+pandas>=2.0.0

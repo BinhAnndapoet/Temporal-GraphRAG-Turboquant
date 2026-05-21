@@ -6,6 +6,8 @@ graph_output/*
 evaluation/*
 logs/
 outputs/
+output_*/
+database_exports/*
 
 # *.json
 *.log
@@ -14,3 +16,5 @@ outputs/
 venv/
 refractor_working.py
 .DS_Store
+
+.last_graph_run_id

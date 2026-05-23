@@ -24,16 +24,17 @@ User `guest` tự chạy toàn bộ workflow mà không cần admin `khoibui` s�
 
 ### Cách đúng sau khi fix
 
-Không bind mount `database_exports` vào Neo4j nữa. Thay vào đó:
+Không bind mount thư mục export vào Neo4j nữa. Thay vào đó:
 
 ```text
-Temporal-GraphRAG output
+outputs/build_graph/<BUILD_CASE>/
         |
         v
 export_temporal_graphrag_to_tables.py
         |
-        v
-database_exports/<GRAPH_RUN_ID>/
+        +--> outputs/database_exports/<GRAPH_RUN_ID>/
+        |
+        +--> logs/graphdb_export/<GRAPH_RUN_ID>.log
         |
         | docker cp
         v
@@ -43,6 +44,8 @@ Neo4j container:/var/lib/neo4j/import/<GRAPH_RUN_ID>/
         v
 Neo4j Graph Database
 ```
+
+Quy ước mới: các package export mới nằm trong `outputs/database_exports/`. Folder root `database_exports/` chỉ còn là dữ liệu legacy nếu từng chạy theo hướng dẫn cũ; không cần xoá folder đó.
 
 ### Vì sao không bind mount trực tiếp?
 
@@ -134,12 +137,19 @@ thì đang dùng nhầm system Docker. Cần logout/login lại user `guest`, ho
 
 ### 1.3. Kiểm tra output Temporal-GraphRAG
 
-Giai đoạn export cần 3 file bắt buộc trong `output_ollama`:
+Giai đoạn export cần 3 file bắt buộc trong output build graph. Với luồng TurboQuant hiện tại, dùng `outputs/build_graph/<BUILD_CASE>` thay vì `output_ollama` ở root.
+
+Ví dụ với run 7B p4 c64k:
 
 ```bash
-ls -la output_ollama/graph_chunk_entity_relation.graphml
-ls -la output_ollama/kv_store_full_docs.json
-ls -la output_ollama/kv_store_text_chunks.json
+cd ~/Projects/Research/Temporal-GraphRAG-Turboquant
+
+export BUILD_CASE=turboquant_384_qwen25-7b-q8-ctkq8-ctvturbo3-c64k-p4-np4096
+export WORKING_DIR=outputs/build_graph/${BUILD_CASE}
+
+ls -la ${WORKING_DIR}/graph_chunk_entity_relation.graphml
+ls -la ${WORKING_DIR}/kv_store_full_docs.json
+ls -la ${WORKING_DIR}/kv_store_text_chunks.json
 ```
 
 Ý nghĩa:
@@ -152,9 +162,13 @@ ls -la output_ollama/kv_store_text_chunks.json
 
 Nếu thiếu một trong ba file này, script export sẽ dừng với lỗi `FileNotFoundError`.
 
+
 ---
 
-## 2. Xử lý thư mục `database_exports` nếu từng bị lỗi quyền
+## 2. Xử lý thư mục legacy `database_exports` nếu từng bị lỗi quyền
+
+
+> Luồng mới không ghi export vào root `database_exports/` nữa. Chỉ dùng phần này khi cần đọc/cứu dữ liệu cũ hoặc folder cũ đang bị lỗi quyền. Không xoá folder `database_exports` hiện có nếu còn cần đối chiếu kết quả cũ.
 
 Chỉ cần làm phần này nếu gặp lỗi:
 
@@ -185,7 +199,7 @@ owner=guest uid=1001 group=guest gid=1001
 
 ### 2.2. Quarantine folder hỏng rồi tạo lại folder sạch
 
-Nếu thư mục cũ đang thuộc `7474:7474`, không nên cố dùng tiếp. Đổi tên nó rồi tạo mới:
+Nếu thư mục cũ đang thuộc `7474:7474` và thật sự cần dùng lại tên `database_exports`, có thể quarantine bằng cách đổi tên. Thao tác này không xoá dữ liệu cũ, nhưng chỉ nên chạy khi cần cứu folder legacy:
 
 ```bash
 BROKEN_DIR="database_exports_broken_7474_$(date +%Y%m%d_%H%M%S)"
@@ -225,11 +239,13 @@ Tạo cấu trúc thư mục cần thiết và cài thư viện Python phục v�
 
 - Project root: `~/Projects/Research/Temporal-GraphRAG-Turboquant`
 - Python environment hiện tại, ví dụ `(turboquant)`
+- Output build graph trong `outputs/build_graph/<BUILD_CASE>`
 
 ## Output
 
 - Thư mục `scripts/graph_database/cypher`
-- Thư mục `database_exports`
+- Thư mục `outputs/database_exports`
+- Thư mục `logs/graphdb_export`
 - File `requirements-graphdb.txt`
 - Python packages: `networkx`, `pandas`
 
@@ -248,7 +264,8 @@ docker info | grep -Ei 'rootless|Docker Root Dir'
 
 echo "===== CREATE DIRS ====="
 mkdir -p scripts/graph_database/cypher
-mkdir -p database_exports
+mkdir -p outputs/database_exports
+mkdir -p logs/graphdb_export
 
 echo "===== CREATE REQUIREMENTS ====="
 cat > requirements-graphdb.txt <<'EOF'
@@ -260,7 +277,7 @@ echo "===== INSTALL REQUIREMENTS ====="
 pip install -r requirements-graphdb.txt
 
 echo "===== VERIFY ====="
-ls -ld scripts scripts/graph_database scripts/graph_database/cypher database_exports
+ls -ld scripts scripts/graph_database scripts/graph_database/cypher outputs outputs/database_exports logs logs/graphdb_export
 cat requirements-graphdb.txt
 ```
 
@@ -269,7 +286,8 @@ cat requirements-graphdb.txt
 | Lệnh | Dùng để làm gì |
 |---|---|
 | `mkdir -p scripts/graph_database/cypher` | Tạo thư mục chứa script/cypher liên quan đến graph database |
-| `mkdir -p database_exports` | Tạo thư mục lưu CSV, Cypher và manifest export |
+| `mkdir -p outputs/database_exports` | Tạo thư mục lưu CSV, Cypher và manifest export cho các lần chạy mới |
+| `mkdir -p logs/graphdb_export` | Tạo thư mục lưu log export/import để debug từng bước |
 | `cat > requirements-graphdb.txt` | Tạo file khai báo thư viện cần cài |
 | `pip install -r requirements-graphdb.txt` | Cài `networkx` để đọc GraphML và `pandas` để ghi CSV |
 | `ls -ld ...` | Kiểm tra thư mục đã tạo và quyền owner |
@@ -280,8 +298,8 @@ cat requirements-graphdb.txt
 Chạy:
 
 ```bash
-ls -ld database_exports
-stat -c 'path=%n owner=%U uid=%u group=%G gid=%g perm=%A mode=%a' database_exports
+ls -ld outputs/database_exports logs/graphdb_export
+stat -c 'path=%n owner=%U uid=%u group=%G gid=%g perm=%A mode=%a' outputs/database_exports logs/graphdb_export
 
 python - <<'PY'
 import networkx as nx
@@ -299,6 +317,7 @@ networkx: ...
 pandas: ...
 ```
 
+
 ---
 
 # Giai đoạn 2: Viết hoặc kiểm tra Script Converter
@@ -315,7 +334,7 @@ Script này đọc output Temporal-GraphRAG gồm GraphML và JSON, rồi tạo 
 
 ## Input
 
-Trong `output_ollama` cần có:
+Trong `outputs/build_graph/<BUILD_CASE>` cần có:
 
 ```text
 graph_chunk_entity_relation.graphml
@@ -325,7 +344,7 @@ kv_store_text_chunks.json
 
 ## Output
 
-Trong `database_exports/<GRAPH_RUN_ID>/` sẽ tạo:
+Trong `outputs/database_exports/<GRAPH_RUN_ID>/` sẽ tạo:
 
 ```text
 docs.csv
@@ -354,7 +373,7 @@ from datetime import datetime
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Export Temporal-GraphRAG output to CSV for Neo4j")
-    parser.add_argument("--working_dir", required=True, help="Folder output graph đã build, ví dụ ./output_ollama")
+    parser.add_argument("--working_dir", required=True, help="Folder output graph đã build, ví dụ ./outputs/build_graph/<BUILD_CASE>")
     parser.add_argument("--export_dir", required=True, help="Folder lưu CSV/Cypher export")
     parser.add_argument("--graph_run_id", required=True, help="ID định danh cho lần export/import này")
     parser.add_argument("--overwrite", action="store_true", help="Ghi đè nếu folder export đã tồn tại")
@@ -559,6 +578,9 @@ PY
 ```bash
 cd ~/Projects/Research/Temporal-GraphRAG-Turboquant
 
+export BUILD_CASE=turboquant_384_qwen25-7b-q8-ctkq8-ctvturbo3-c64k-p4-np4096
+export WORKING_DIR=outputs/build_graph/${BUILD_CASE}
+
 echo "===== SCRIPT CHECK ====="
 ls -la scripts/graph_database/export_temporal_graphrag_to_tables.py
 
@@ -566,12 +588,12 @@ echo "===== SYNTAX CHECK ====="
 python -m py_compile scripts/graph_database/export_temporal_graphrag_to_tables.py
 
 echo "===== REQUIRED INPUT FILES CHECK ====="
-ls -la output_ollama/graph_chunk_entity_relation.graphml
-ls -la output_ollama/kv_store_full_docs.json
-ls -la output_ollama/kv_store_text_chunks.json
+ls -la ${WORKING_DIR}/graph_chunk_entity_relation.graphml
+ls -la ${WORKING_DIR}/kv_store_full_docs.json
+ls -la ${WORKING_DIR}/kv_store_text_chunks.json
 ```
 
-Nếu `python -m py_compile` không in lỗi gì, script hợp lệ.
+Nếu `python -m py_compile` không in lỗi gì và 3 file input tồn tại, script hợp lệ.
 
 ---
 
@@ -579,23 +601,29 @@ Nếu `python -m py_compile` không in lỗi gì, script hợp lệ.
 
 ## Mục tiêu
 
-Chạy script converter để tạo CSV/Cypher import package cho Neo4j.
+Chạy script converter để tạo CSV/Cypher import package cho Neo4j và ghi log từng bước để dễ kiểm tra lại.
 
 ## Input
 
-- `output_ollama/graph_chunk_entity_relation.graphml`
-- `output_ollama/kv_store_full_docs.json`
-- `output_ollama/kv_store_text_chunks.json`
+- `outputs/build_graph/<BUILD_CASE>/graph_chunk_entity_relation.graphml`
+- `outputs/build_graph/<BUILD_CASE>/kv_store_full_docs.json`
+- `outputs/build_graph/<BUILD_CASE>/kv_store_text_chunks.json`
 
 ## Output
 
 Một folder export mới:
 
 ```text
-database_exports/ollama_run_<YYYYMMDD_HHMMSS>/
+outputs/database_exports/<GRAPH_RUN_ID>/
 ```
 
-Bên trong có:
+Một file log tương ứng:
+
+```text
+logs/graphdb_export/<GRAPH_RUN_ID>.log
+```
+
+Bên trong export folder có:
 
 ```text
 chunks.csv
@@ -612,54 +640,81 @@ node_chunk_links.csv
 ```bash
 cd ~/Projects/Research/Temporal-GraphRAG-Turboquant
 
-echo "===== PRE-EXPORT PERMISSION CHECK ====="
-ls -ld database_exports
-stat -c 'path=%n owner=%U uid=%u group=%G gid=%g perm=%A mode=%a' database_exports
+set -euo pipefail
 
-echo
-echo "===== CREATE GRAPH_RUN_ID ====="
+export BUILD_CASE=turboquant_384_qwen25-7b-q8-ctkq8-ctvturbo3-c64k-p4-np4096
+export WORKING_DIR=outputs/build_graph/${BUILD_CASE}
+
 RUN_ID=$(date +%Y%m%d_%H%M%S)
-GRAPH_RUN_ID="ollama_run_${RUN_ID}"
+export GRAPH_RUN_ID="${BUILD_CASE}_neo4j_${RUN_ID}"
+export EXPORT_ROOT=outputs/database_exports
+export EXPORT_DIR=${EXPORT_ROOT}/${GRAPH_RUN_ID}
+export EXPORT_LOG=logs/graphdb_export/${GRAPH_RUN_ID}.log
 
-echo "$GRAPH_RUN_ID" > .last_graph_run_id
-echo "GRAPH_RUN_ID=$GRAPH_RUN_ID"
+mkdir -p ${EXPORT_ROOT} logs/graphdb_export
+echo "${GRAPH_RUN_ID}" > .last_graph_run_id
 
-echo
-echo "===== RUN EXPORT SCRIPT ====="
-python scripts/graph_database/export_temporal_graphrag_to_tables.py \
-  --working_dir ./output_ollama \
-  --export_dir ./database_exports/${GRAPH_RUN_ID} \
-  --graph_run_id ${GRAPH_RUN_ID} \
-  --overwrite
+{
+  echo "===== GRAPH_RUN_ID ====="
+  echo "GRAPH_RUN_ID=${GRAPH_RUN_ID}"
+  echo "WORKING_DIR=${WORKING_DIR}"
+  echo "EXPORT_DIR=${EXPORT_DIR}"
+  echo "EXPORT_LOG=${EXPORT_LOG}"
 
-echo
-echo "===== VERIFY EXPORT OUTPUT ====="
-ls -la database_exports/${GRAPH_RUN_ID}
+  echo
+  echo "===== PRE-EXPORT INPUT CHECK ====="
+  ls -la ${WORKING_DIR}/graph_chunk_entity_relation.graphml
+  ls -la ${WORKING_DIR}/kv_store_full_docs.json
+  ls -la ${WORKING_DIR}/kv_store_text_chunks.json
 
-echo
-echo "===== MANIFEST ====="
-cat database_exports/${GRAPH_RUN_ID}/manifest.json
+  echo
+  echo "===== PRE-EXPORT DIR CHECK ====="
+  stat -c 'path=%n owner=%U uid=%u group=%G gid=%g perm=%A mode=%a' ${EXPORT_ROOT} logs/graphdb_export
+
+  echo
+  echo "===== RUN EXPORT SCRIPT ====="
+  python scripts/graph_database/export_temporal_graphrag_to_tables.py \
+    --working_dir ${WORKING_DIR} \
+    --export_dir ${EXPORT_DIR} \
+    --graph_run_id ${GRAPH_RUN_ID} \
+    --overwrite
+
+  echo
+  echo "===== VERIFY EXPORT OUTPUT ====="
+  ls -la ${EXPORT_DIR}
+
+  echo
+  echo "===== MANIFEST ====="
+  cat ${EXPORT_DIR}/manifest.json
+} 2>&1 | tee ${EXPORT_LOG}
 ```
 
 ## Giải thích lệnh
 
 | Lệnh | Dùng để làm gì |
 |---|---|
-| `RUN_ID=$(date +%Y%m%d_%H%M%S)` | Tạo timestamp cho lần export |
-| `GRAPH_RUN_ID="ollama_run_${RUN_ID}"` | Định danh lần chạy, dùng chung giữa CSV và Cypher |
-| `echo "$GRAPH_RUN_ID" > .last_graph_run_id` | Lưu lại run id mới nhất để Giai đoạn 4 dùng lại |
-| `--working_dir ./output_ollama` | Nơi chứa output Temporal-GraphRAG |
-| `--export_dir ./database_exports/${GRAPH_RUN_ID}` | Nơi ghi package export |
+| `BUILD_CASE=...` | Tên output build graph đã chạy, thường trùng model/parallel/context để dễ truy vết |
+| `WORKING_DIR=outputs/build_graph/${BUILD_CASE}` | Nơi chứa output Temporal-GraphRAG cần export |
+| `GRAPH_RUN_ID="${BUILD_CASE}_neo4j_${RUN_ID}"` | Định danh lần export/import, có cả build case và timestamp |
+| `EXPORT_DIR=outputs/database_exports/${GRAPH_RUN_ID}` | Nơi ghi package export mới |
+| `EXPORT_LOG=logs/graphdb_export/${GRAPH_RUN_ID}.log` | Nơi ghi log export/import để debug |
+| `echo "${GRAPH_RUN_ID}" > .last_graph_run_id` | Lưu run id mới nhất để Giai đoạn 4 dùng lại |
 | `--graph_run_id ${GRAPH_RUN_ID}` | Gắn run id vào từng row CSV để phân biệt các lần chạy |
 | `--overwrite` | Cho phép ghi đè nếu folder export đã tồn tại |
+| `2>&1 | tee ${EXPORT_LOG}` | Vừa hiển thị terminal vừa lưu log |
+
+Log là cần thiết ở giai đoạn này vì export/import có nhiều bước rời nhau: kiểm tra input, ghi CSV, copy vào container, rồi import Cypher. Khi lỗi, file `logs/graphdb_export/<GRAPH_RUN_ID>.log` giúp biết lỗi xảy ra ở bước nào mà không cần đoán từ terminal scrollback.
 
 ## Kiểm tra giai đoạn 3 đã đúng chưa
 
 ```bash
 GRAPH_RUN_ID=$(cat .last_graph_run_id)
+EXPORT_DIR=outputs/database_exports/${GRAPH_RUN_ID}
+EXPORT_LOG=logs/graphdb_export/${GRAPH_RUN_ID}.log
 
-ls -la database_exports/${GRAPH_RUN_ID}
-cat database_exports/${GRAPH_RUN_ID}/manifest.json
+ls -la ${EXPORT_DIR}
+cat ${EXPORT_DIR}/manifest.json
+ls -lh ${EXPORT_LOG}
 ```
 
 Kết quả cần có đủ:
@@ -678,17 +733,18 @@ Ví dụ manifest thành công:
 
 ```json
 {
-  "graph_run_id": "ollama_run_20260521_155444",
-  "generated_at": "2026-05-21T15:54:44.833583",
+  "graph_run_id": "turboquant_384_qwen25-7b-q8-ctkq8-ctvturbo3-c64k-p4-np4096_neo4j_20260522_021500",
+  "generated_at": "2026-05-22T02:15:00.833583",
   "counts": {
-    "docs": 1,
-    "chunks": 5,
-    "entity_nodes": 133,
-    "entity_relationships": 128,
-    "node_chunk_links": 170
+    "docs": 384,
+    "chunks": 1462,
+    "entity_nodes": 12345,
+    "entity_relationships": 6789,
+    "node_chunk_links": 17000
   }
 }
 ```
+
 
 ---
 
@@ -700,8 +756,9 @@ Chạy Neo4j bằng Docker rootless của `guest`, copy export package vào cont
 
 ## Input
 
-- `database_exports/<GRAPH_RUN_ID>/neo4j_import.cypher`
+- `outputs/database_exports/<GRAPH_RUN_ID>/neo4j_import.cypher`
 - Các file CSV trong cùng folder
+- Log tiếp tục ghi vào `logs/graphdb_export/<GRAPH_RUN_ID>.log`
 
 ## Output
 
@@ -814,14 +871,21 @@ Giải thích:
 
 ```bash
 GRAPH_RUN_ID=$(cat .last_graph_run_id)
-echo "GRAPH_RUN_ID=$GRAPH_RUN_ID"
+EXPORT_DIR=outputs/database_exports/${GRAPH_RUN_ID}
+EXPORT_LOG=logs/graphdb_export/${GRAPH_RUN_ID}.log
 
-docker exec tgrag-neo4j mkdir -p /var/lib/neo4j/import/${GRAPH_RUN_ID}
+echo "GRAPH_RUN_ID=${GRAPH_RUN_ID}"
+echo "EXPORT_DIR=${EXPORT_DIR}"
 
-docker cp database_exports/${GRAPH_RUN_ID}/. \
-  tgrag-neo4j:/var/lib/neo4j/import/${GRAPH_RUN_ID}/
+{
+  echo "===== COPY EXPORT INTO CONTAINER ====="
+  docker exec tgrag-neo4j mkdir -p /var/lib/neo4j/import/${GRAPH_RUN_ID}
 
-docker exec tgrag-neo4j ls -la /var/lib/neo4j/import/${GRAPH_RUN_ID}
+  docker cp ${EXPORT_DIR}/. \
+    tgrag-neo4j:/var/lib/neo4j/import/${GRAPH_RUN_ID}/
+
+  docker exec tgrag-neo4j ls -la /var/lib/neo4j/import/${GRAPH_RUN_ID}
+} 2>&1 | tee -a ${EXPORT_LOG}
 ```
 
 Giải thích:
@@ -829,16 +893,25 @@ Giải thích:
 | Lệnh | Dùng để làm gì |
 |---|---|
 | `GRAPH_RUN_ID=$(cat .last_graph_run_id)` | Lấy lại run id mới nhất từ Giai đoạn 3 |
+| `EXPORT_DIR=outputs/database_exports/${GRAPH_RUN_ID}` | Trỏ đúng package export mới trong `outputs/` |
 | `docker exec ... mkdir -p` | Tạo thư mục import bên trong container |
-| `docker cp ...` | Copy CSV/Cypher từ host vào container |
+| `docker cp ${EXPORT_DIR}/.` | Copy CSV/Cypher từ host vào container |
 | `docker exec ... ls -la` | Kiểm tra file đã vào container chưa |
+| `tee -a ${EXPORT_LOG}` | Ghi tiếp log copy vào cùng log export |
+
 
 ## 4.6. Import dữ liệu bằng Cypher Shell
 
 ```bash
-docker exec -i tgrag-neo4j \
-  cypher-shell -u neo4j -p tgrag-local-2026 \
-  -f /var/lib/neo4j/import/${GRAPH_RUN_ID}/neo4j_import.cypher
+GRAPH_RUN_ID=$(cat .last_graph_run_id)
+EXPORT_LOG=logs/graphdb_export/${GRAPH_RUN_ID}.log
+
+{
+  echo "===== IMPORT CYPHER ====="
+  docker exec -i tgrag-neo4j \
+    cypher-shell -u neo4j -p tgrag-local-2026 \
+    -f /var/lib/neo4j/import/${GRAPH_RUN_ID}/neo4j_import.cypher
+} 2>&1 | tee -a ${EXPORT_LOG}
 ```
 
 Giải thích:
@@ -847,27 +920,31 @@ Giải thích:
 - `cypher-shell`: CLI của Neo4j để chạy Cypher.
 - `-u neo4j -p tgrag-local-2026`: thông tin đăng nhập Neo4j.
 - `-f .../neo4j_import.cypher`: chạy toàn bộ script import đã tạo ở Giai đoạn 3.
+- `tee -a ${EXPORT_LOG}`: ghi tiếp log import vào cùng file log export.
 
 Nếu lệnh này không in lỗi, import đã chạy xong.
+
 
 ## 4.7. Kiểm tra dữ liệu đã import
 
 ```bash
-docker exec -i tgrag-neo4j \
-  cypher-shell -u neo4j -p tgrag-local-2026 \
-  "MATCH (n:TGRAGEntity) RETURN count(n) AS entity_count;"
-```
+GRAPH_RUN_ID=$(cat .last_graph_run_id)
+EXPORT_LOG=logs/graphdb_export/${GRAPH_RUN_ID}.log
 
-```bash
-docker exec -i tgrag-neo4j \
-  cypher-shell -u neo4j -p tgrag-local-2026 \
-  "MATCH ()-[r:RELATED]->() RETURN count(r) AS related_count;"
-```
+{
+  echo "===== CHECK COUNTS ====="
+  docker exec -i tgrag-neo4j \
+    cypher-shell -u neo4j -p tgrag-local-2026 \
+    "MATCH (n:TGRAGEntity {graph_run_id: '${GRAPH_RUN_ID}'}) RETURN count(n) AS entity_count;"
 
-```bash
-docker exec -i tgrag-neo4j \
-  cypher-shell -u neo4j -p tgrag-local-2026 \
-  "MATCH (c:TGRAGChunk) RETURN count(c) AS chunk_count;"
+  docker exec -i tgrag-neo4j \
+    cypher-shell -u neo4j -p tgrag-local-2026 \
+    "MATCH (:TGRAGEntity {graph_run_id: '${GRAPH_RUN_ID}'})-[r:RELATED {graph_run_id: '${GRAPH_RUN_ID}'}]->(:TGRAGEntity {graph_run_id: '${GRAPH_RUN_ID}'}) RETURN count(r) AS related_count;"
+
+  docker exec -i tgrag-neo4j \
+    cypher-shell -u neo4j -p tgrag-local-2026 \
+    "MATCH (c:TGRAGChunk {graph_run_id: '${GRAPH_RUN_ID}'}) RETURN count(c) AS chunk_count;"
+} 2>&1 | tee -a ${EXPORT_LOG}
 ```
 
 Kết quả mong muốn khớp hoặc gần khớp với `manifest.json`. Ví dụ:
@@ -1122,10 +1199,11 @@ Sau đó copy file:
 
 ```bash
 GRAPH_RUN_ID=$(cat .last_graph_run_id)
+EXPORT_DIR=outputs/database_exports/${GRAPH_RUN_ID}
 
 docker exec tgrag-neo4j mkdir -p /var/lib/neo4j/import/${GRAPH_RUN_ID}
 
-docker cp database_exports/${GRAPH_RUN_ID}/. \
+docker cp ${EXPORT_DIR}/. \
   tgrag-neo4j:/var/lib/neo4j/import/${GRAPH_RUN_ID}/
 ```
 
@@ -1204,7 +1282,7 @@ GRAPH_RUN_ID=$(cat .last_graph_run_id)
 Hoặc lấy run mới nhất:
 
 ```bash
-GRAPH_RUN_ID=$(basename "$(ls -td database_exports/ollama_run_* | head -1)")
+GRAPH_RUN_ID=$(basename "$(ls -td outputs/database_exports/*_neo4j_* | head -1)")
 echo "$GRAPH_RUN_ID" > .last_graph_run_id
 ```
 
@@ -1262,87 +1340,112 @@ Docker Root Dir: /home/guest/.local/share/docker
 
 # One-command workflow sau khi setup xong
 
-Sau khi Giai đoạn 1 và 2 đã ổn, có thể chạy nhanh toàn bộ export + Neo4j import bằng block sau:
+Sau khi Giai đoạn 1 và 2 đã ổn, có thể chạy nhanh toàn bộ export + Neo4j import bằng block sau. Lệnh này dùng `outputs/database_exports/` cho export mới và ghi log vào `logs/graphdb_export/`.
 
 ```bash
 cd ~/Projects/Research/Temporal-GraphRAG-Turboquant
 
-set -e
+set -euo pipefail
 
-echo "===== CHECK ROOTLESS DOCKER ====="
-echo "DOCKER_HOST=$DOCKER_HOST"
-docker info | grep -Ei 'rootless|Docker Root Dir'
+export BUILD_CASE=turboquant_384_qwen25-7b-q8-ctkq8-ctvturbo3-c64k-p4-np4096
+export WORKING_DIR=outputs/build_graph/${BUILD_CASE}
 
-echo "===== PREPARE EXPORT DIR ====="
-mkdir -p database_exports
-stat -c 'path=%n owner=%U uid=%u group=%G gid=%g perm=%A mode=%a' database_exports
-
-echo "===== EXPORT ====="
 RUN_ID=$(date +%Y%m%d_%H%M%S)
-GRAPH_RUN_ID="ollama_run_${RUN_ID}"
-echo "$GRAPH_RUN_ID" > .last_graph_run_id
+export GRAPH_RUN_ID="${BUILD_CASE}_neo4j_${RUN_ID}"
+export EXPORT_ROOT=outputs/database_exports
+export EXPORT_DIR=${EXPORT_ROOT}/${GRAPH_RUN_ID}
+export EXPORT_LOG=logs/graphdb_export/${GRAPH_RUN_ID}.log
 
-python scripts/graph_database/export_temporal_graphrag_to_tables.py \
-  --working_dir ./output_ollama \
-  --export_dir ./database_exports/${GRAPH_RUN_ID} \
-  --graph_run_id ${GRAPH_RUN_ID} \
-  --overwrite
+mkdir -p ${EXPORT_ROOT} logs/graphdb_export
+echo "${GRAPH_RUN_ID}" > .last_graph_run_id
 
-cat database_exports/${GRAPH_RUN_ID}/manifest.json
+{
+  echo "===== CHECK ROOTLESS DOCKER ====="
+  echo "DOCKER_HOST=$DOCKER_HOST"
+  docker info | grep -Ei 'rootless|Docker Root Dir'
 
-echo "===== START NEO4J ====="
-docker rm -f tgrag-neo4j 2>/dev/null || true
+  echo
+  echo "===== PRE-EXPORT INPUT CHECK ====="
+  ls -la ${WORKING_DIR}/graph_chunk_entity_relation.graphml
+  ls -la ${WORKING_DIR}/kv_store_full_docs.json
+  ls -la ${WORKING_DIR}/kv_store_text_chunks.json
 
-docker run -d \
-  --name tgrag-neo4j \
-  -p 17474:7474 \
-  -p 17687:7687 \
-  -e NEO4J_AUTH=neo4j/tgrag-local-2026 \
-  neo4j:5-community
+  echo
+  echo "===== EXPORT ====="
+  python scripts/graph_database/export_temporal_graphrag_to_tables.py \
+    --working_dir ${WORKING_DIR} \
+    --export_dir ${EXPORT_DIR} \
+    --graph_run_id ${GRAPH_RUN_ID} \
+    --overwrite
 
-echo "===== WAIT NEO4J ====="
-until docker exec tgrag-neo4j cypher-shell -u neo4j -p tgrag-local-2026 "RETURN 1;" >/dev/null 2>&1; do
-  if [ "$(docker inspect -f '{{.State.Running}}' tgrag-neo4j)" != "true" ]; then
-    echo "Neo4j container stopped. Logs:"
-    docker logs --tail 120 tgrag-neo4j
-    exit 1
-  fi
-  echo "Waiting for Neo4j..."
-  sleep 2
-done
+  echo
+  echo "===== MANIFEST ====="
+  cat ${EXPORT_DIR}/manifest.json
 
-echo "===== COPY EXPORT INTO CONTAINER ====="
-docker exec tgrag-neo4j mkdir -p /var/lib/neo4j/import/${GRAPH_RUN_ID}
+  echo
+  echo "===== START NEO4J ====="
+  docker rm -f tgrag-neo4j 2>/dev/null || true
 
-docker cp database_exports/${GRAPH_RUN_ID}/. \
-  tgrag-neo4j:/var/lib/neo4j/import/${GRAPH_RUN_ID}/
+  docker run -d \
+    --name tgrag-neo4j \
+    -p 17474:7474 \
+    -p 17687:7687 \
+    -e NEO4J_AUTH=neo4j/tgrag-local-2026 \
+    neo4j:5-community
 
-docker exec tgrag-neo4j ls -la /var/lib/neo4j/import/${GRAPH_RUN_ID}
+  echo
+  echo "===== WAIT NEO4J ====="
+  until docker exec tgrag-neo4j cypher-shell -u neo4j -p tgrag-local-2026 "RETURN 1;" >/dev/null 2>&1; do
+    if [ "$(docker inspect -f '{{.State.Running}}' tgrag-neo4j)" != "true" ]; then
+      echo "Neo4j container stopped. Logs:"
+      docker logs --tail 120 tgrag-neo4j
+      exit 1
+    fi
+    echo "Waiting for Neo4j..."
+    sleep 2
+  done
 
-echo "===== IMPORT ====="
-docker exec -i tgrag-neo4j \
-  cypher-shell -u neo4j -p tgrag-local-2026 \
-  -f /var/lib/neo4j/import/${GRAPH_RUN_ID}/neo4j_import.cypher
+  echo
+  echo "===== COPY EXPORT INTO CONTAINER ====="
+  docker exec tgrag-neo4j mkdir -p /var/lib/neo4j/import/${GRAPH_RUN_ID}
 
-echo "===== CHECK COUNTS ====="
-docker exec -i tgrag-neo4j \
-  cypher-shell -u neo4j -p tgrag-local-2026 \
-  "MATCH (n:TGRAGEntity) RETURN count(n) AS entity_count;"
+  docker cp ${EXPORT_DIR}/. \
+    tgrag-neo4j:/var/lib/neo4j/import/${GRAPH_RUN_ID}/
 
-docker exec -i tgrag-neo4j \
-  cypher-shell -u neo4j -p tgrag-local-2026 \
-  "MATCH ()-[r:RELATED]->() RETURN count(r) AS related_count;"
+  docker exec tgrag-neo4j ls -la /var/lib/neo4j/import/${GRAPH_RUN_ID}
 
-docker exec -i tgrag-neo4j \
-  cypher-shell -u neo4j -p tgrag-local-2026 \
-  "MATCH (c:TGRAGChunk) RETURN count(c) AS chunk_count;"
+  echo
+  echo "===== IMPORT ====="
+  docker exec -i tgrag-neo4j \
+    cypher-shell -u neo4j -p tgrag-local-2026 \
+    -f /var/lib/neo4j/import/${GRAPH_RUN_ID}/neo4j_import.cypher
 
-echo "===== DONE ====="
-echo "Neo4j Browser HTTP: http://<tailscale-ip>:17474"
-echo "Neo4j Bolt URL:     neo4j://<tailscale-ip>:17687"
-echo "Username:           neo4j"
-echo "Password:           tgrag-local-2026"
+  echo
+  echo "===== CHECK COUNTS ====="
+  docker exec -i tgrag-neo4j \
+    cypher-shell -u neo4j -p tgrag-local-2026 \
+    "MATCH (n:TGRAGEntity {graph_run_id: '${GRAPH_RUN_ID}'}) RETURN count(n) AS entity_count;"
+
+  docker exec -i tgrag-neo4j \
+    cypher-shell -u neo4j -p tgrag-local-2026 \
+    "MATCH (:TGRAGEntity {graph_run_id: '${GRAPH_RUN_ID}'})-[r:RELATED {graph_run_id: '${GRAPH_RUN_ID}'}]->(:TGRAGEntity {graph_run_id: '${GRAPH_RUN_ID}'}) RETURN count(r) AS related_count;"
+
+  docker exec -i tgrag-neo4j \
+    cypher-shell -u neo4j -p tgrag-local-2026 \
+    "MATCH (c:TGRAGChunk {graph_run_id: '${GRAPH_RUN_ID}'}) RETURN count(c) AS chunk_count;"
+
+  echo
+  echo "===== DONE ====="
+  echo "GRAPH_RUN_ID=${GRAPH_RUN_ID}"
+  echo "EXPORT_DIR=${EXPORT_DIR}"
+  echo "EXPORT_LOG=${EXPORT_LOG}"
+  echo "Neo4j Browser HTTP: http://<tailscale-ip>:17474"
+  echo "Neo4j Bolt URL:     neo4j://<tailscale-ip>:17687"
+  echo "Username:           neo4j"
+  echo "Password:           tgrag-local-2026"
+} 2>&1 | tee ${EXPORT_LOG}
 ```
+
 
 ---
 
@@ -1351,8 +1454,8 @@ echo "Password:           tgrag-local-2026"
 | Vấn đề | Quyết định fix |
 |---|---|
 | `guest` không nên ảnh hưởng system Docker/admin | Dùng rootless Docker của `guest` |
-| `database_exports` bị đổi owner `7474:7474` | Không bind mount trực tiếp vào Neo4j |
-| Neo4j fail khi mount `:ro` | Không mount `database_exports`; dùng `docker cp` |
+| Root `database_exports` bị đổi owner `7474:7474` | Dùng `outputs/database_exports` cho run mới; root `database_exports` chỉ là legacy |
+| Neo4j fail khi mount `:ro` | Không mount folder export; dùng `docker cp` từ `outputs/database_exports/<GRAPH_RUN_ID>` |
 | Web UI mở được nhưng login fail | Dùng đúng Bolt URL `neo4j://<tailscale-ip>:17687` |
 | Port `7474/7687` dễ trùng | Dùng host port `17474/17687` |
-| `GRAPH_RUN_ID` mất khi mở terminal mới | Lưu vào `.last_graph_run_id` |
+| `GRAPH_RUN_ID` mất khi mở terminal mới | Lưu vào `.last_graph_run_id`; log nằm ở `logs/graphdb_export/<GRAPH_RUN_ID>.log` |

@@ -1,6 +1,11 @@
 """LLM completion functions with caching and retry logic."""
 
+import json
 import logging
+import os
+import time
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, List, Any, Dict, Callable
 
 from tenacity import (
@@ -22,6 +27,46 @@ from .client import (
 )
 
 logger = logging.getLogger("temporal-graphrag.llm")
+
+
+def _usage_to_dict(response: Any) -> Dict[str, Any]:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return {}
+    if hasattr(usage, "model_dump"):
+        return usage.model_dump()
+    if isinstance(usage, dict):
+        return usage
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0),
+        "completion_tokens": getattr(usage, "completion_tokens", 0),
+        "total_tokens": getattr(usage, "total_tokens", 0),
+    }
+
+
+def _message_chars(messages: List[Dict[str, Any]]) -> int:
+    total = 0
+    for message in messages:
+        content = message.get("content", "")
+        if isinstance(content, str):
+            total += len(content)
+        else:
+            total += len(str(content))
+    return total
+
+
+def _append_usage_log(row: Dict[str, Any]) -> None:
+    usage_log = os.getenv("TG_RAG_USAGE_LOG")
+    if not usage_log:
+        return
+
+    try:
+        path = Path(usage_log)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception as exc:  # pragma: no cover - logging must not break builds
+        logger.warning("Failed to append TG_RAG_USAGE_LOG row: %s", exc)
 
 
 @retry(
@@ -52,31 +97,88 @@ async def openai_complete_if_cache(
     messages.extend(history_messages)
     messages.append({"role": "user", "content": prompt})
     
+    prompt_chars = _message_chars(messages)
+    args_hash = None
+
     # Check cache
     if hashing_kv is not None:
         args_hash = compute_args_hash(model, messages)
         cached_response = await hashing_kv.get_by_id(args_hash)
         if cached_response is not None:
             logger.debug(f"[{request_id}] Cache hit")
-            return cached_response["return"]
+            if isinstance(cached_response, dict):
+                response_text = cached_response.get("return", "")
+                cached_usage = cached_response.get("usage", {})
+            else:
+                response_text = str(cached_response)
+                cached_usage = {}
+            _append_usage_log({
+                "ts": datetime.now().isoformat(),
+                "event": "cache_hit",
+                "provider": "openai",
+                "model": model,
+                "base_url": base_url or "default",
+                "request_id": request_id,
+                "cache_hit": True,
+                "elapsed_seconds": 0.0,
+                "prompt_chars": prompt_chars,
+                "response_chars": len(response_text or ""),
+                "usage": cached_usage,
+            })
+            return response_text
         logger.debug(f"[{request_id}] Cache miss")
-    
+
     # Make API call
     request_timeout = kwargs.pop("timeout", 120.0)
-    response = await openai_client.chat.completions.create(
-        model=model, messages=messages, timeout=request_timeout, **kwargs
-    )
-    
+    request_start = time.perf_counter()
+    try:
+        response = await openai_client.chat.completions.create(
+            model=model, messages=messages, timeout=request_timeout, **kwargs
+        )
+    except Exception as exc:
+        _append_usage_log({
+            "ts": datetime.now().isoformat(),
+            "event": "api_error",
+            "provider": "openai",
+            "model": model,
+            "base_url": base_url or "default",
+            "request_id": request_id,
+            "cache_hit": False,
+            "elapsed_seconds": round(time.perf_counter() - request_start, 6),
+            "prompt_chars": prompt_chars,
+            "response_chars": 0,
+            "usage": {},
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:1000],
+        })
+        raise
+
+    elapsed_seconds = time.perf_counter() - request_start
     response_text = response.choices[0].message.content
-    
+    usage = _usage_to_dict(response)
+
+    _append_usage_log({
+        "ts": datetime.now().isoformat(),
+        "event": "api_success",
+        "provider": "openai",
+        "model": model,
+        "base_url": base_url or "default",
+        "request_id": request_id,
+        "cache_hit": False,
+        "elapsed_seconds": round(elapsed_seconds, 6),
+        "prompt_chars": prompt_chars,
+        "response_chars": len(response_text or ""),
+        "usage": usage,
+    })
+
     # Store in cache
-    if hashing_kv is not None:
+    if hashing_kv is not None and args_hash is not None:
         await hashing_kv.upsert(
-            {args_hash: {"return": response_text, "model": model}}
+            {args_hash: {"return": response_text, "model": model, "usage": usage}}
         )
         await hashing_kv.index_done_callback()
-    
-    logger.debug(f"[{request_id}] OpenAI response: {len(response_text)} chars")
+
+    logger.debug(f"[{request_id}] OpenAI response: {len(response_text or '')} chars")
     return response_text
 
 

@@ -161,19 +161,66 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         elif provider == "ollama":
             wire_protocol = "ollama-native"
 
+    embedding_model = args.embedding_model
+    embedding_dim = args.embedding_dim
+    embedding_max_tokens = args.embedding_max_tokens
+    embedding_max_chars = args.embedding_max_chars
+    embedding_device = args.embedding_device
+    embedding_batch_size = args.embedding_batch_size
+    embedding_batch_num = args.embedding_batch_num
+    embedding_max_async = args.embedding_max_async
+    embedding_prefix = args.embedding_prefix
+    if embedding_provider == "huggingface":
+        embedding_base_url = None
+
     if provider:
         override_config["provider"] = provider
     if model:
         override_config["model"] = model
     if embedding_provider:
         override_config["embedding_provider"] = embedding_provider
+    if embedding_model:
+        override_config["embedding_model"] = embedding_model
+    if embedding_dim:
+        override_config["embedding_dim"] = embedding_dim
+    if embedding_max_tokens:
+        override_config["embedding_max_tokens"] = embedding_max_tokens
+    if embedding_max_chars:
+        override_config["embedding_max_chars"] = embedding_max_chars
+    if embedding_device:
+        override_config["embedding_device"] = embedding_device
+    if embedding_batch_size:
+        override_config["embedding_batch_size"] = embedding_batch_size
+    if embedding_batch_num:
+        override_config["embedding_batch_num"] = embedding_batch_num
+    if embedding_max_async:
+        override_config["embedding_func_max_async"] = embedding_max_async
+    if embedding_prefix is not None:
+        override_config["embedding_prefix"] = embedding_prefix
     if llm_max_async:
         override_config["best_model_max_async"] = llm_max_async
         override_config["cheap_model_max_async"] = llm_max_async
     if llm_timeout:
         override_config["llm_timeout"] = llm_timeout
 
-    if not any([provider, model, llm_base_url, embedding_provider, embedding_base_url, llm_max_async, llm_timeout]):
+    if not any([
+        provider,
+        model,
+        llm_base_url,
+        embedding_provider,
+        embedding_base_url,
+        embedding_model,
+        embedding_dim,
+        embedding_max_tokens,
+        embedding_max_chars,
+        embedding_device,
+        embedding_batch_size,
+        embedding_batch_num,
+        embedding_max_async,
+        embedding_prefix,
+        llm_max_async,
+        llm_timeout,
+    ]):
         return {}
 
     return {
@@ -183,6 +230,15 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         "llm_base_url": llm_base_url,
         "embedding_provider": embedding_provider or "config",
         "embedding_base_url": embedding_base_url,
+        "embedding_model": embedding_model,
+        "embedding_dim": embedding_dim,
+        "embedding_max_tokens": embedding_max_tokens,
+        "embedding_max_chars": embedding_max_chars,
+        "embedding_device": embedding_device,
+        "embedding_batch_size": embedding_batch_size,
+        "embedding_batch_num": embedding_batch_num,
+        "embedding_max_async": embedding_max_async,
+        "embedding_prefix": embedding_prefix,
         "llm_max_async": llm_max_async,
         "llm_timeout": llm_timeout,
         "wire_protocol": wire_protocol,
@@ -204,6 +260,25 @@ def print_runtime(runtime_config: Dict) -> None:
         f"[runtime] embedding_provider={runtime_config['embedding_provider']} "
         f"embedding_base_url={runtime_config['embedding_base_url']}"
     )
+    embedding_details = {
+        "embedding_model": runtime_config.get("embedding_model"),
+        "embedding_dim": runtime_config.get("embedding_dim"),
+        "embedding_max_tokens": runtime_config.get("embedding_max_tokens"),
+        "embedding_max_chars": runtime_config.get("embedding_max_chars"),
+        "embedding_device": runtime_config.get("embedding_device"),
+        "embedding_batch_size": runtime_config.get("embedding_batch_size"),
+        "embedding_batch_num": runtime_config.get("embedding_batch_num"),
+        "embedding_max_async": runtime_config.get("embedding_max_async"),
+        "embedding_prefix": runtime_config.get("embedding_prefix"),
+    }
+    enabled_embedding_details = {
+        key: value for key, value in embedding_details.items() if value is not None
+    }
+    if enabled_embedding_details:
+        print(
+            "[runtime] "
+            + " ".join(f"{key}={value}" for key, value in enabled_embedding_details.items())
+        )
 
 
 def load_documents_from_corpus(corpus_path: Path, num_docs: int = 3) -> List[Dict]:
@@ -470,7 +545,7 @@ def main():
     )
     parser.add_argument(
         '--embedding_provider',
-        choices=['ollama', 'openai', 'azure', 'bedrock'],
+        choices=['ollama', 'openai', 'azure', 'bedrock', 'huggingface'],
         default=None,
         help='Override embedding provider from config'
     )
@@ -479,6 +554,60 @@ def main():
         type=str,
         default=None,
         help='Embedding base URL, e.g. http://localhost:11434 for Ollama embeddings'
+    )
+    parser.add_argument(
+        '--embedding_model',
+        type=str,
+        default=None,
+        help='Override embedding model, e.g. nomic-ai/nomic-embed-text-v1.5 for HuggingFace'
+    )
+    parser.add_argument(
+        '--embedding_dim',
+        type=int,
+        default=None,
+        help='Override embedding vector dimension, e.g. 768 for Nomic or 1024 for BGE-M3'
+    )
+    parser.add_argument(
+        '--embedding_max_tokens',
+        type=int,
+        default=None,
+        help='Override embedding model max token length'
+    )
+    parser.add_argument(
+        '--embedding_max_chars',
+        type=int,
+        default=None,
+        help='Truncate embedding input content above this many characters before embedding'
+    )
+    parser.add_argument(
+        '--embedding_device',
+        type=str,
+        default=None,
+        help='HuggingFace embedding device, e.g. cpu, cuda, or cuda:0'
+    )
+    parser.add_argument(
+        '--embedding_batch_size',
+        type=int,
+        default=None,
+        help='Provider internal embedding encode batch size'
+    )
+    parser.add_argument(
+        '--embedding_batch_num',
+        type=int,
+        default=None,
+        help='Vector store embedding batch size'
+    )
+    parser.add_argument(
+        '--embedding_max_async',
+        type=int,
+        default=None,
+        help='Maximum concurrent embedding batch calls'
+    )
+    parser.add_argument(
+        '--embedding_prefix',
+        type=str,
+        default=None,
+        help='Prefix added to HuggingFace document embeddings, e.g. "search_document: " for Nomic'
     )
     parser.add_argument(
         '--llm_max_async',

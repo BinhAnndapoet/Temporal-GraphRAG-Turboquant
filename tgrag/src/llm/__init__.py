@@ -27,6 +27,7 @@ from .embedding import (
     ollama_embedding,
     gemini_embedding,
 )
+from .huggingface_embedding import huggingface_embedding
 from .config import LLMConfig, LLMProviderConfig
 
 __all__ = [
@@ -55,6 +56,7 @@ __all__ = [
     "amazon_bedrock_embedding",
     "ollama_embedding",
     "gemini_embedding",
+    "huggingface_embedding",
     # Config
     "LLMConfig",
     "LLMProviderConfig",

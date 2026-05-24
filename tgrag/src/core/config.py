@@ -123,6 +123,14 @@ class EmbeddingConfig:
         enable_entity_retrieval: Enable entity-based retrieval
     """
     embedding_func: EmbeddingFunc = None  # Will be set in __post_init__
+    embedding_provider: str = "openai"
+    embedding_model: Optional[str] = None
+    embedding_dim: Optional[int] = None
+    embedding_max_tokens: Optional[int] = None
+    embedding_max_chars: Optional[int] = None
+    embedding_device: str = "cpu"
+    embedding_batch_size: int = 16
+    embedding_prefix: str = "search_document: "
     embedding_batch_num: int = 32
     embedding_func_max_async: int = 16
     query_better_than_threshold: float = 0.2

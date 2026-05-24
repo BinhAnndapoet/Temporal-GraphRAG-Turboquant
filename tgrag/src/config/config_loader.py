@@ -137,6 +137,14 @@ class ConfigLoader:
         
         # EmbeddingConfig
         structured['embedding'] = EmbeddingConfig(
+            embedding_provider=raw_config.get('embedding_provider', 'openai'),
+            embedding_model=raw_config.get('embedding_model'),
+            embedding_dim=raw_config.get('embedding_dim'),
+            embedding_max_tokens=raw_config.get('embedding_max_tokens'),
+            embedding_max_chars=raw_config.get('embedding_max_chars'),
+            embedding_device=raw_config.get('embedding_device', 'cpu'),
+            embedding_batch_size=raw_config.get('embedding_batch_size', 16),
+            embedding_prefix=raw_config.get('embedding_prefix', 'search_document: '),
             embedding_batch_num=raw_config.get('embedding_batch_num', 32),
             embedding_func_max_async=raw_config.get('embedding_func_max_async', 16),
             query_better_than_threshold=raw_config.get('query_better_than_threshold', 0.2),

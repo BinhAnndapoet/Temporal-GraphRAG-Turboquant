@@ -13,6 +13,7 @@ from .llm.embedding import (
     amazon_bedrock_embedding,
     ollama_embedding,
 )
+from .llm.huggingface_embedding import huggingface_embedding
 from .utils.types import EmbeddingFunc
 import numpy as np
 
@@ -59,23 +60,43 @@ def create_llm_function(
     )
 
 
-def create_embedding_function(embedding_provider: str, api_key: Optional[str] = None, base_url: Optional[str] = None):
+def create_embedding_function(
+    embedding_provider: str,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    embedding_model: Optional[str] = None,
+    embedding_dim: Optional[int] = None,
+    embedding_max_tokens: Optional[int] = None,
+    embedding_device: Optional[str] = None,
+    embedding_batch_size: Optional[int] = None,
+    embedding_prefix: Optional[str] = None,
+):
     """Create embedding function based on embedding provider."""
-    # Get base_url from env if not provided and provider supports it
     if not base_url and embedding_provider in ("openai", "azure", "gemini"):
         base_url = os.getenv('OPENAI_BASE_URL')
     elif not base_url and embedding_provider == "bedrock":
         base_url = os.getenv('BEDROCK_BASE_URL')
     elif not base_url and embedding_provider == "ollama":
         base_url = os.getenv('OLLAMA_BASE_URL')
-    
+
+    provider_defaults = {
+        "openai": {"dim": 1536, "max_tokens": 8192},
+        "azure": {"dim": 1536, "max_tokens": 8192},
+        "bedrock": {"dim": 1024, "max_tokens": 8192},
+        "ollama": {"dim": 768, "max_tokens": 8192},
+        "huggingface": {"dim": 768, "max_tokens": 7500},
+    }
+    defaults = provider_defaults.get(embedding_provider, provider_defaults["openai"])
+    resolved_dim = embedding_dim or defaults["dim"]
+    resolved_max_tokens = embedding_max_tokens or defaults["max_tokens"]
+
     async def embedding_wrapper(texts: List[str]) -> np.ndarray:
         kwargs = {}
         if api_key:
             kwargs['api_key'] = api_key
         if base_url:
             kwargs['base_url'] = base_url
-        
+
         if embedding_provider == "openai":
             return await openai_embedding(texts, **kwargs)
         elif embedding_provider == "azure":
@@ -83,37 +104,28 @@ def create_embedding_function(embedding_provider: str, api_key: Optional[str] = 
         elif embedding_provider == "bedrock":
             return await amazon_bedrock_embedding(texts)
         elif embedding_provider == "ollama":
-            return await ollama_embedding(texts, base_url=base_url)
+            return await ollama_embedding(
+                texts,
+                model=embedding_model or "nomic-embed-text",
+                base_url=base_url,
+            )
+        elif embedding_provider == "huggingface":
+            return await huggingface_embedding(
+                texts,
+                model=embedding_model or "nomic-ai/nomic-embed-text-v1.5",
+                device=embedding_device or "cpu",
+                batch_size=embedding_batch_size or 16,
+                max_tokens=resolved_max_tokens,
+                prefix="search_document: " if embedding_prefix is None else embedding_prefix,
+            )
         else:
-            # Default to OpenAI
             return await openai_embedding(texts, **kwargs)
-    
-    # Return appropriate EmbeddingFunc based on embedding provider
-    if embedding_provider in ("openai", "azure"):
-        return EmbeddingFunc(
-            embedding_dim=1536,
-            func=embedding_wrapper,
-            max_token_size=8192
-        )
-    elif embedding_provider == "bedrock":
-        return EmbeddingFunc(
-            embedding_dim=1024,  # Typical for Bedrock embeddings
-            func=embedding_wrapper,
-            max_token_size=8192
-        )
-    elif embedding_provider == "ollama":
-        return EmbeddingFunc(
-            embedding_dim=768,
-            func=embedding_wrapper,
-            max_token_size=8192
-        )
-    else:
-        # Default to OpenAI (1536-dim)
-        return EmbeddingFunc(
-            embedding_dim=1536,
-            func=embedding_wrapper,
-            max_token_size=8192
-        )
+
+    return EmbeddingFunc(
+        embedding_dim=resolved_dim,
+        func=embedding_wrapper,
+        max_token_size=resolved_max_tokens,
+    )
 
 
 def create_temporal_graphrag_from_config(
@@ -213,6 +225,14 @@ def create_temporal_graphrag_from_config(
     # If embedding provider is gemini, default to openai (gemini embeddings not supported)
     if embedding_provider == "gemini":
         embedding_provider = "openai"
+
+    embedding_model = config.get('embedding_model')
+    embedding_dim = config.get('embedding_dim')
+    embedding_max_tokens = config.get('embedding_max_tokens')
+    embedding_max_chars = config.get('embedding_max_chars')
+    embedding_device = config.get('embedding_device', 'cpu')
+    embedding_batch_size = config.get('embedding_batch_size', 16)
+    embedding_prefix = config.get('embedding_prefix', 'search_document: ')
     
     resolved_embedding_base_url = embedding_base_url
     if resolved_embedding_base_url is None and embedding_provider == provider:
@@ -258,6 +278,9 @@ def create_temporal_graphrag_from_config(
         embedding_api_key = None
         if not resolved_embedding_base_url:
             resolved_embedding_base_url = os.getenv('OLLAMA_BASE_URL')
+    elif embedding_provider == "huggingface":
+        embedding_api_key = None
+        resolved_embedding_base_url = None
     
     # Create LLM and embedding functions
     llm_func = create_llm_function(
@@ -268,9 +291,15 @@ def create_temporal_graphrag_from_config(
         timeout=config.get('llm_timeout'),
     )
     embedding_func = create_embedding_function(
-        embedding_provider=embedding_provider, 
-        api_key=embedding_api_key, 
-        base_url=resolved_embedding_base_url
+        embedding_provider=embedding_provider,
+        api_key=embedding_api_key,
+        base_url=resolved_embedding_base_url,
+        embedding_model=embedding_model,
+        embedding_dim=embedding_dim,
+        embedding_max_tokens=embedding_max_tokens,
+        embedding_device=embedding_device,
+        embedding_batch_size=embedding_batch_size,
+        embedding_prefix=embedding_prefix,
     )
     
     # Create TemporalGraphRAG instance
@@ -282,6 +311,16 @@ def create_temporal_graphrag_from_config(
         chunk_overlap_token_size=config.get('chunk_overlap', 100),
         disable_entity_summarization=config.get('disable_entity_summarization', False),
         embedding_func=embedding_func,
+        embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        embedding_dim=embedding_dim,
+        embedding_max_tokens=embedding_max_tokens,
+        embedding_max_chars=embedding_max_chars,
+        embedding_device=embedding_device,
+        embedding_batch_size=embedding_batch_size,
+        embedding_prefix=embedding_prefix,
+        embedding_batch_num=config.get('embedding_batch_num', 32),
+        embedding_func_max_async=config.get('embedding_func_max_async', 16),
         best_model_func=llm_func,
         cheap_model_func=llm_func,  # Use same model for both
         best_model_max_token_size=config.get('best_model_max_token_size', 65536),

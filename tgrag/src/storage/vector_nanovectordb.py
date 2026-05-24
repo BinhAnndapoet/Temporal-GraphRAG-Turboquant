@@ -40,7 +40,12 @@ class NanoVectorDBStorage(BaseVectorStorage):
                 self.global_config["working_dir"], f"vdb_{self.namespace}.json"
             )
         
-        self._max_batch_size = self.global_config["embedding_batch_num"]
+        self._max_batch_size = max(1, int(self.global_config.get("embedding_batch_num", 32)))
+        embedding_max_chars = self.global_config.get("embedding_max_chars")
+        self._embedding_max_chars = int(embedding_max_chars) if embedding_max_chars else None
+        self._embedding_max_async = max(
+            1, int(self.global_config.get("embedding_func_max_async", 16))
+        )
         self._data: Dict[str, Dict[str, Any]] = {}
         self._embeddings: Dict[str, np.ndarray] = {}
         
@@ -104,7 +109,41 @@ class NanoVectorDBStorage(BaseVectorStorage):
             for k, v in data.items()
         ]
         
-        contents = [v["content"] for v in data.values()]
+        raw_items = [(item_id, values, values.get("content", "")) for item_id, values in data.items()]
+        lengths = [(item_id, len(content), values) for item_id, values, content in raw_items]
+        if lengths:
+            max_len = max(length for _, length, _ in lengths)
+            avg_len = sum(length for _, length, _ in lengths) / len(lengths)
+            print(
+                f"[build-detail] embedding content lengths ({self.namespace}): "
+                f"items={len(lengths)} max_chars={max_len} avg_chars={avg_len:.1f}",
+                flush=True,
+            )
+            for rank, (item_id, length, values) in enumerate(
+                sorted(lengths, key=lambda item: item[1], reverse=True)[:5],
+                start=1,
+            ):
+                entity_name = values.get("entity_name") or values.get("src_id") or ""
+                print(
+                    f"[build-detail] embedding content top{rank} ({self.namespace}): "
+                    f"id={item_id} entity_name={entity_name} chars={length}",
+                    flush=True,
+                )
+
+        max_chars = self._embedding_max_chars
+        contents = []
+        for item_id, values, content in raw_items:
+            if max_chars and len(content) > max_chars:
+                entity_name = values.get("entity_name") or values.get("src_id") or ""
+                print(
+                    f"[build-detail] Truncate embedding content ({self.namespace}): "
+                    f"id={item_id} entity_name={entity_name} "
+                    f"old_chars={len(content)} max_chars={max_chars}",
+                    flush=True,
+                )
+                content = content[:max_chars]
+            contents.append(content)
+
         batches = [
             contents[i : i + self._max_batch_size]
             for i in range(0, len(contents), self._max_batch_size)
@@ -112,13 +151,20 @@ class NanoVectorDBStorage(BaseVectorStorage):
         prep_done = time.perf_counter()
         print(
             f"[build-detail] vector payload prep ({self.namespace}): "
-            f"{prep_done - total_start:.2f}s batches={len(batches)} batch_size={self._max_batch_size}",
+            f"{prep_done - total_start:.2f}s batches={len(batches)} "
+            f"batch_size={self._max_batch_size} max_async={self._embedding_max_async}",
             flush=True,
         )
         
         logger.info(f"Generating embeddings for {len(batches)} batches...")
+        semaphore = asyncio.Semaphore(self._embedding_max_async)
+
+        async def _embed_batch(batch: List[str]) -> np.ndarray:
+            async with semaphore:
+                return await self.embedding_func(batch)
+
         embeddings_list = await asyncio.gather(
-            *[self.embedding_func(batch) for batch in batches]
+            *[_embed_batch(batch) for batch in batches]
         )
         logger.info(f"Completed embedding generation for {len(embeddings_list)} batches")
         embed_done = time.perf_counter()

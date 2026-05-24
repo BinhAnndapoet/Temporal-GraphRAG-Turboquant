@@ -7,6 +7,7 @@ evaluation/*
 logs/
 outputs/
 output_*/
+results/
 database_exports/*
 
 # *.json

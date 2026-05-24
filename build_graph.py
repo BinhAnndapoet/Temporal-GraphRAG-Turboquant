@@ -279,6 +279,9 @@ def print_runtime(runtime_config: Dict) -> None:
             "[runtime] "
             + " ".join(f"{key}={value}" for key, value in enabled_embedding_details.items())
         )
+    usage_log = os.getenv("TG_RAG_USAGE_LOG")
+    if usage_log:
+        print(f"[runtime] usage_log={usage_log}")
 
 
 def load_documents_from_corpus(corpus_path: Path, num_docs: int = 3) -> List[Dict]:

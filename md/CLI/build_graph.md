@@ -17,6 +17,7 @@ Mục tiêu chính:
 
 ```text
 md/CLI/start_server.md
+md/CLI/resume_build_graph.md
 md/debug/debug_localLLM_log_results.md
 md/runbooks/resume_setup.md
 ```
@@ -29,8 +30,9 @@ Kết luận hiện tại phải nói rõ:
 
 ```text
 HF embedding đã pass smoke build 1/5/10 docs với 7B p2/c64k.
-Chưa có bằng chứng HF embedding đã pass 50/100/384 docs.
-Vì vậy chưa gọi là ổn định full 384, chỉ gọi là ổn định bước đầu.
+HF embedding cũng đã chạy xong full 384 docs với 7B p4/c131k CUDA.
+Run 384 đó pass kỹ thuật cho graph/vector/docs nhưng chưa clean community vì 10 community reports vượt context slot.
+Vì vậy trạng thái đúng là: HF embedding ổn hơn Ollama embedding, còn community report cần xử lý bằng profile p1 hoặc split/cap prompt.
 ```
 
 Kết quả đã kiểm:
@@ -704,4 +706,3 @@ Trước khi chạy 384 nhiều lần, nên cân nhắc thêm:
 - community rebuild-only
 
 Nếu chưa có resume, 384 fail ở cuối sẽ tốn rất nhiều thời gian chạy lại.
-

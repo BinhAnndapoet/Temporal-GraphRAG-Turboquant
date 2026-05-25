@@ -34,8 +34,9 @@ import gzip
 import argparse
 import logging
 import time
+from datetime import datetime
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 import urllib.request
 
@@ -294,32 +295,110 @@ def print_runtime(runtime_config: Dict) -> None:
         print(f"[runtime] usage_log={usage_log}")
 
 
-def load_documents_from_corpus(corpus_path: Path, num_docs: int = 3) -> List[Dict]:
+def load_documents_from_corpus(
+    corpus_path: Path,
+    num_docs: int = 3,
+    doc_start: int = 0,
+    doc_end: Optional[int] = None,
+) -> List[Dict]:
     """
     Load documents from the ECT-QA corpus.
     
     Args:
         corpus_path: Path to the corpus file (base.jsonl.gz)
-        num_docs: Number of documents to load
+        num_docs: Number of documents to load when doc_end is not set
+        doc_start: Zero-based corpus index to start loading from
+        doc_end: Exclusive zero-based corpus index to stop loading at
         
     Returns:
         List of document dictionaries
     """
     if not corpus_path.exists():
         raise FileNotFoundError(f"Corpus file not found: {corpus_path}")
+    if doc_start < 0:
+        raise ValueError(f"doc_start must be >= 0, got {doc_start}")
+    if doc_end is not None and doc_end <= doc_start:
+        raise ValueError(f"doc_end must be > doc_start, got {doc_end} <= {doc_start}")
+
+    effective_end = doc_end if doc_end is not None else doc_start + num_docs
     
     documents = []
     try:
         with gzip.open(corpus_path, 'rt', encoding='utf-8') as f:
             for i, line in enumerate(f):
-                if i >= num_docs:
+                if i < doc_start:
+                    continue
+                if i >= effective_end:
                     break
                 doc = json.loads(line)
+                doc["_corpus_index"] = i
                 documents.append(doc)
-        print(f"✅ Loaded {len(documents)} documents from corpus")
+        print(
+            f"✅ Loaded {len(documents)} documents from corpus "
+            f"(doc_start={doc_start}, doc_end={effective_end})"
+        )
         return documents
     except Exception as e:
         raise RuntimeError(f"Error loading corpus: {e}")
+
+
+def _write_resume_manifest_event(
+    manifest_path: Optional[str],
+    *,
+    run_id: str,
+    status: str,
+    stage: str,
+    args: argparse.Namespace,
+    runtime_config: Dict[str, Any],
+    error: Optional[str] = None,
+) -> None:
+    """Append/update a lightweight JSON manifest entry for resumable runs."""
+    if not manifest_path:
+        return
+
+    path = Path(manifest_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {}
+    else:
+        manifest = {}
+
+    runs = manifest.setdefault("runs", [])
+    event = {
+        "run_id": run_id,
+        "status": status,
+        "stage": stage,
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "output_dir": args.output_dir,
+        "corpus_path": args.corpus_path,
+        "num_docs": args.num_docs,
+        "doc_start": args.doc_start,
+        "doc_end": args.doc_end,
+        "skip_community_reports": args.skip_community_reports,
+        "rebuild_communities_only": args.rebuild_communities_only,
+        "enable_chunk_extraction_cache": args.enable_chunk_extraction_cache,
+        "chunk_extraction_cache_path": args.chunk_extraction_cache_path,
+        "model": runtime_config.get("model"),
+        "local_llm_backend": runtime_config.get("local_llm_backend"),
+        "embedding_provider": runtime_config.get("embedding_provider"),
+        "embedding_model": runtime_config.get("embedding_model"),
+    }
+    if error:
+        event["error"] = error
+
+    for idx, existing in enumerate(runs):
+        if existing.get("run_id") == run_id:
+            runs[idx] = {**existing, **event}
+            break
+    else:
+        runs.append(event)
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def load_documents_from_txt_file(txt_path: Path) -> List[Dict]:
@@ -515,6 +594,18 @@ def main():
         help='Number of documents to process from the corpus'
     )
     parser.add_argument(
+        '--doc_start',
+        type=int,
+        default=0,
+        help='Zero-based corpus document index to start from when loading .jsonl.gz corpus'
+    )
+    parser.add_argument(
+        '--doc_end',
+        type=int,
+        default=None,
+        help='Exclusive zero-based corpus document index to stop at. Overrides --num_docs range end when set'
+    )
+    parser.add_argument(
         '--corpus_path',
         type=str,
         default='ect-qa/corpus/base.jsonl.gz',
@@ -640,6 +731,33 @@ def main():
         default=None,
         help='Timeout in seconds for the full entity extraction stage. Use 0 to disable the stage timeout.'
     )
+    parser.add_argument(
+        '--skip_community_reports',
+        action='store_true',
+        help='Skip community report generation during insert. Useful for resumable staged builds.'
+    )
+    parser.add_argument(
+        '--rebuild_communities_only',
+        action='store_true',
+        help='Load existing graph/hierarchy from --output_dir and rebuild community reports only.'
+    )
+    parser.add_argument(
+        '--resume_manifest',
+        type=str,
+        default=None,
+        help='Optional JSON manifest path to record resumable run status.'
+    )
+    parser.add_argument(
+        '--enable_chunk_extraction_cache',
+        action='store_true',
+        help='Persist parsed chunk extraction results so reruns can skip LLM extraction for cached chunks.'
+    )
+    parser.add_argument(
+        '--chunk_extraction_cache_path',
+        type=str,
+        default=None,
+        help='Optional path for chunk extraction cache JSON. Defaults to <output_dir>/kv_store_chunk_extractions.json.'
+    )
     
     args = parser.parse_args()
     
@@ -653,7 +771,16 @@ def main():
         override_config['chunk_overlap'] = args.chunk_overlap
     if args.output_dir:
         override_config['working_dir'] = args.output_dir
+    if args.skip_community_reports:
+        override_config['enable_community_summary'] = False
+    if args.enable_chunk_extraction_cache:
+        override_config['enable_chunk_extraction_cache'] = True
+    if args.chunk_extraction_cache_path:
+        override_config['chunk_extraction_cache_path'] = args.chunk_extraction_cache_path
+    if args.model:
+        override_config['llm_model_name'] = args.model
     runtime_config = apply_runtime_overrides(args, override_config)
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Create TemporalGraphRAG from config (simplified!)
     print("="*60)
@@ -663,6 +790,19 @@ def main():
     if override_config:
         print(f"Overrides: {override_config}")
     print_runtime(runtime_config)
+    if args.resume_manifest:
+        print(f"[runtime] resume_manifest={args.resume_manifest}")
+    if args.doc_start or args.doc_end is not None:
+        print(f"[runtime] doc_start={args.doc_start} doc_end={args.doc_end}")
+    if args.skip_community_reports:
+        print("[runtime] skip_community_reports=true")
+    if args.rebuild_communities_only:
+        print("[runtime] rebuild_communities_only=true")
+    if args.enable_chunk_extraction_cache:
+        print(
+            "[runtime] enable_chunk_extraction_cache=true "
+            f"chunk_extraction_cache_path={args.chunk_extraction_cache_path or '<output_dir>/kv_store_chunk_extractions.json'}"
+        )
     print()
 
     if runtime_config.get("local_llm_backend") == "turboquant":
@@ -696,6 +836,67 @@ def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+    if args.rebuild_communities_only:
+        _write_resume_manifest_event(
+            args.resume_manifest,
+            run_id=run_id,
+            status="running",
+            stage="community-only",
+            args=args,
+            runtime_config=runtime_config,
+        )
+        try:
+            print("\n" + "="*60)
+            print("Rebuilding community reports only...")
+            print("="*60)
+            graph_rag.rebuild_community_reports()
+            print("\n✅ Community reports rebuilt successfully!")
+            timer.mark("rebuild community reports only")
+            _write_resume_manifest_event(
+                args.resume_manifest,
+                run_id=run_id,
+                status="completed",
+                stage="community-only",
+                args=args,
+                runtime_config=runtime_config,
+            )
+        except Exception as e:
+            _write_resume_manifest_event(
+                args.resume_manifest,
+                run_id=run_id,
+                status="failed",
+                stage="community-only",
+                args=args,
+                runtime_config=runtime_config,
+                error=str(e),
+            )
+            print(f"\n❌ Error during community-only rebuild: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        finally:
+            try:
+                from tgrag.src.llm.client import get_client_manager
+                import asyncio
+                client_manager = get_client_manager()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(client_manager.close_clients())
+                loop.close()
+            except Exception:
+                pass
+
+        print("\n" + "="*60)
+        print("BUILD SUMMARY")
+        print("="*60)
+        print("✅ Mode: community-only rebuild")
+        print(f"✅ Graph stored in: {Path(graph_rag.working_dir).absolute()}")
+        print(f"✅ Working directory: {graph_rag.working_dir}")
+        print(f"✅ Configuration: {args.config}")
+        print(f"✅ Total elapsed: {format_seconds(timer.total())}")
+        print("="*60)
+        return
     
     # Load documents from corpus path (use config or override)
     from tgrag.src.config.config_loader import ConfigLoader
@@ -709,7 +910,12 @@ def main():
             if corpus_path.suffix == '.gz' or corpus_path.suffixes[-2:] == ['.jsonl', '.gz']:
                 # JSONL.gz corpus file (e.g., ECT-QA)
                 print(f"📚 Loading from corpus file: {corpus_path}")
-                documents = load_documents_from_corpus(corpus_path, args.num_docs)
+                documents = load_documents_from_corpus(
+                    corpus_path,
+                    args.num_docs,
+                    doc_start=args.doc_start,
+                    doc_end=args.doc_end,
+                )
             elif corpus_path.suffix.lower() in {'.txt', '.md', '.rst', '.text', '.log'} or corpus_path.suffix == '':
                 # Single text file
                 print(f"📄 Loading from text file: {corpus_path}")
@@ -749,10 +955,35 @@ def main():
     
     try:
         print("[timer] build graph started")
+        _write_resume_manifest_event(
+            args.resume_manifest,
+            run_id=run_id,
+            status="running",
+            stage="insert",
+            args=args,
+            runtime_config=runtime_config,
+        )
         graph_rag.insert(prepared_docs)
         print("\n✅ Graph building completed successfully!")
         timer.mark("insert documents and build graph")
+        _write_resume_manifest_event(
+            args.resume_manifest,
+            run_id=run_id,
+            status="completed",
+            stage="insert",
+            args=args,
+            runtime_config=runtime_config,
+        )
     except Exception as e:
+        _write_resume_manifest_event(
+            args.resume_manifest,
+            run_id=run_id,
+            status="failed",
+            stage="insert",
+            args=args,
+            runtime_config=runtime_config,
+            error=str(e),
+        )
         print(f"\n❌ Error during graph building: {e}")
         import traceback
         traceback.print_exc()

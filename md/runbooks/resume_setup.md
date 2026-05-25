@@ -7,7 +7,26 @@ Tài liệu này phân tích cơ chế resume cho giai đoạn **build graph** c
 - Dataset ECT-QA `base.jsonl.gz` khoảng 384 docs.
 - Mục tiêu thực tế: nếu build lỗi ở 50/100/384 docs thì lần sau có thể chạy tiếp, tránh mất hàng giờ LLM extraction.
 
-Tài liệu này **chưa sửa code**. Phần code bên dưới là diff minh họa để biết cần chỉnh file nào, chỉnh ở đâu, và mức độ thay đổi ra sao.
+Trạng thái hiện tại: đã triển khai phiên bản resume CLI tối thiểu trên branch `feature/build-graph-resume-cli`.
+Tài liệu này vẫn giữ phần phân tích thiết kế chi tiết; hướng dẫn chạy thực tế nằm ở:
+
+```text
+md/CLI/resume_build_graph.md
+```
+
+Các phần đã triển khai:
+
+- `--doc_start`, `--doc_end` để chạy theo range docs.
+- `--resume_manifest` để ghi trạng thái run.
+- `--enable_chunk_extraction_cache` và `--chunk_extraction_cache_path` để cache parsed extraction theo chunk.
+- `--skip_community_reports` để build graph/vector trước.
+- `--rebuild_communities_only` để rebuild community từ graph/hierarchy đã persist.
+
+Các phần vẫn là thiết kế/chưa triển khai đầy đủ:
+
+- rebuild riêng các community lỗi thay vì rebuild toàn bộ community;
+- cap/split community prompt để xử lý prompt 100K-180K tokens;
+- vector upsert checkpoint theo batch.
 
 ---
 
@@ -1370,4 +1389,3 @@ Patch nên ưu tiên theo thứ tự:
 2. `chunk_extraction_cache`.
 3. `--rebuild_communities_only`.
 4. Vector batch checkpoint nếu 384 vẫn fail ở embedding.
-

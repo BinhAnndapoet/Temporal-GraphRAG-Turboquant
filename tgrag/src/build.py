@@ -333,6 +333,9 @@ def create_temporal_graphrag_from_config(
         enable_community_summary=config.get('enable_community_summary', True),
         enable_incremental=config.get('enable_incremental', False),
         preserve_communities=config.get('preserve_communities', False),
+        enable_chunk_extraction_cache=config.get('enable_chunk_extraction_cache', False),
+        chunk_extraction_cache_path=config.get('chunk_extraction_cache_path'),
+        llm_model_name=config.get('llm_model_name', model),
     )
     
     return graph_rag
@@ -344,4 +347,3 @@ __all__ = [
     "create_embedding_function",
     "get_api_key_for_provider",
 ]
-

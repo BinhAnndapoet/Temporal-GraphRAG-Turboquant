@@ -6,6 +6,7 @@ import re
 import json
 import asyncio
 import time
+import os
 from typing import Union, List, Optional, Dict, Any
 from collections import Counter, defaultdict
 import logging
@@ -31,6 +32,8 @@ from ..utils.helpers import (
     complete_timestamp_range_by_level,
     sort_timestamp_by_datetime,
     convert_timestamp_to_datetime,
+    load_json,
+    write_json,
 )
 
 # Import storage base classes
@@ -809,11 +812,79 @@ async def extract_entities(
 
     print(f"[build-detail] extract_entities started: chunks={len(ordered_chunks)}", flush=True)
 
+    extraction_cache_enabled = bool(global_config.get("enable_chunk_extraction_cache", False))
+    extraction_cache_path = global_config.get("chunk_extraction_cache_path")
+    if extraction_cache_enabled and not extraction_cache_path:
+        extraction_cache_path = os.path.join(
+            global_config["working_dir"], "kv_store_chunk_extractions.json"
+        )
+    extraction_cache: dict[str, Any] = {}
+    extraction_cache_lock = asyncio.Lock()
+    if extraction_cache_enabled:
+        os.makedirs(os.path.dirname(extraction_cache_path) or ".", exist_ok=True)
+        extraction_cache = load_json(extraction_cache_path) or {}
+        print(
+            f"[build-detail] chunk extraction cache enabled: "
+            f"path={extraction_cache_path} entries={len(extraction_cache)}",
+            flush=True,
+        )
+
+    def _cache_key_for_chunk(chunk_key: str, content: str) -> str:
+        model_name = global_config.get("llm_model_name") or "unknown-model"
+        content_hash = compute_mdhash_id(content.strip(), prefix="content-")
+        key_payload = "|".join(
+            [
+                chunk_key,
+                content_hash,
+                model_name,
+                "temporal_entity_extraction_new",
+                str(entity_extract_max_gleaning),
+            ]
+        )
+        return compute_mdhash_id(key_payload, prefix="chunkext-")
+
+    def _serialize_edges(edges: dict) -> list[dict[str, Any]]:
+        return [
+            {
+                "timestamp": key[0],
+                "src_id": key[1],
+                "tgt_id": key[2],
+                "items": value,
+            }
+            for key, value in edges.items()
+        ]
+
+    def _deserialize_edges(edges: list[dict[str, Any]]) -> dict:
+        return {
+            (edge["timestamp"], edge["src_id"], edge["tgt_id"]): edge.get("items", [])
+            for edge in edges
+        }
+
     async def _process_single_content(chunk_key_dp: tuple[str, TextChunkSchema]):
         nonlocal already_processed, already_entities, already_relations
         chunk_key = chunk_key_dp[0]
         chunk_dp = chunk_key_dp[1]
         content = chunk_dp["content"]
+        chunk_cache_key = _cache_key_for_chunk(chunk_key, content)
+
+        if extraction_cache_enabled:
+            cached = extraction_cache.get(chunk_cache_key)
+            if cached and cached.get("status") == "completed":
+                maybe_nodes = cached.get("nodes", {})
+                maybe_edges = _deserialize_edges(cached.get("edges", []))
+                already_processed += 1
+                already_entities += len(maybe_nodes)
+                already_relations += len(maybe_edges)
+                total_chunks = len(ordered_chunks)
+                percentage = min(100, (already_processed * 100) // total_chunks) if total_chunks else 100
+                print(
+                    f"↻ Processed {already_processed}/{total_chunks} ({percentage}%) chunks, "
+                    f"{already_entities} entities(duplicated), "
+                    f"{already_relations} relations(duplicated) [cache]\r",
+                    end="",
+                    flush=True,
+                )
+                return maybe_nodes, maybe_edges
         
         # Retry logic for extraction
         max_retries = 3
@@ -1056,6 +1127,22 @@ Output:"""
         already_processed += 1
         already_entities += len(maybe_nodes)
         already_relations += len(maybe_edges)
+        if extraction_cache_enabled:
+            async with extraction_cache_lock:
+                extraction_cache[chunk_cache_key] = {
+                    "status": "completed",
+                    "chunk_key": chunk_key,
+                    "content_hash": compute_mdhash_id(content.strip(), prefix="content-"),
+                    "model": global_config.get("llm_model_name") or "unknown-model",
+                    "prompt": "temporal_entity_extraction_new",
+                    "entity_extract_max_gleaning": entity_extract_max_gleaning,
+                    "nodes": dict(maybe_nodes),
+                    "edges": _serialize_edges(maybe_edges),
+                    "entities_count": len(maybe_nodes),
+                    "relations_count": len(maybe_edges),
+                    "updated_at": time.time(),
+                }
+                write_json(extraction_cache, extraction_cache_path)
         now_ticks = PROMPTS["process_tickers"][
             already_processed % len(PROMPTS["process_tickers"])
             ]

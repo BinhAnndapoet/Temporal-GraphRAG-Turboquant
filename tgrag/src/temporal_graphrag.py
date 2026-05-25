@@ -152,6 +152,9 @@ class TemporalGraphRAG:
     # incremental update support
     enable_incremental: bool = False
     preserve_communities: bool = False
+    enable_chunk_extraction_cache: bool = False
+    chunk_extraction_cache_path: Optional[str] = None
+    llm_model_name: Optional[str] = None
 
     # text embedding
     embedding_func: EmbeddingFunc = field(default_factory=lambda: openai_embedding)
@@ -314,6 +317,34 @@ class TemporalGraphRAG:
         """
         loop = always_get_an_event_loop()
         return loop.run_until_complete(self.ainsert(dict_or_dicts))
+
+    def rebuild_community_reports(self):
+        """Rebuild community reports from persisted graph and hierarchy only."""
+        loop = always_get_an_event_loop()
+        return loop.run_until_complete(self.arebuild_community_reports())
+
+    async def arebuild_community_reports(self):
+        """Rebuild community reports without rerunning document extraction."""
+        build_total_start = time.perf_counter()
+
+        def mark_stage(label: str) -> None:
+            now = time.perf_counter()
+            print(f"[build-stage] {label}: {now - build_total_start:.2f}s", flush=True)
+
+        await self._insert_start()
+        try:
+            print("[build-stage] community-only rebuild started", flush=True)
+            await self.community_reports.drop()
+            await generate_temporal_report(
+                self.community_reports,
+                knowledge_graph_inst=self.chunk_entity_relation_graph,
+                temporal_hierarchy_graph_inst=self.temporal_hierarchy_graph,
+                global_config=asdict(self),
+            )
+            mark_stage("community report generation")
+        finally:
+            await self._insert_done()
+            mark_stage("persist all storages")
 
     async def get_temporal_hierarchy(self):
         """Get the temporal hierarchy representation."""
@@ -599,4 +630,3 @@ class TemporalGraphRAG:
                 continue
             tasks.append(cast(StorageNameSpace, storage_inst).index_done_callback())
         await asyncio.gather(*tasks)
-

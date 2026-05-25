@@ -17,8 +17,8 @@ Mục tiêu chính:
 
 ```text
 md/CLI/start_server.md
-md/debug_localLLM_log_results.md
-md/resume_setup.md
+md/debug/debug_localLLM_log_results.md
+md/runbooks/resume_setup.md
 ```
 
 ---
@@ -360,7 +360,7 @@ Giải thích nhanh ngay tại lệnh:
 - Đây là run độc lập từng mốc `50/100/384`, mỗi mốc có `output_dir`, build log và usage log riêng.
 - Ưu điểm: dễ so sánh kết quả và không bị trạng thái run trước làm nhiễu run sau.
 - Nhược điểm: không tiết kiệm thời gian vì mỗi mốc build lại từ đầu corpus.
-- Dùng cách này để benchmark sạch; nếu mục tiêu là tiết kiệm thời gian thì xem `resume_setup.md`.
+- Dùng cách này để benchmark sạch; nếu mục tiêu là tiết kiệm thời gian thì xem `md/runbooks/resume_setup.md`.
 - Nếu 50 hoặc 100 fail, không chạy tiếp 384; đọc log trước để biết fail ở extraction, embedding hay community.
 
 ### 5.3 Lệnh 14B Q5 chạy 50/100 trước
@@ -692,7 +692,7 @@ Không reuse output folder cũ vì vector dimension đổi từ 768 sang 1024.
 Hiện `build_graph.py` chưa có `--doc_start` / `--doc_end`, nên chưa có resume sạch theo doc range. Xem:
 
 ```text
-md/resume_setup.md
+md/runbooks/resume_setup.md
 ```
 
 Trước khi chạy 384 nhiều lần, nên cân nhắc thêm:

@@ -135,6 +135,7 @@ class TemporalGraphRAG:
 
     # entity extraction
     entity_extract_max_gleaning: int = 1  
+    entity_extraction_timeout: Optional[float] = 21600.0
     entity_summary_to_max_tokens: int = 500
     disable_entity_summarization: bool = False
 
@@ -473,21 +474,41 @@ class TemporalGraphRAG:
             # ---------- extract/summary entity and upsert to graph
             logger.info("[Entity Extraction]...")
 
+            extraction_timeout = self.entity_extraction_timeout
+            if extraction_timeout is not None and extraction_timeout <= 0:
+                extraction_timeout = None
+            timeout_label = "disabled" if extraction_timeout is None else f"{extraction_timeout:.0f}s"
+            print(f"[build-stage] entity extraction timeout: {timeout_label}", flush=True)
+
+            extraction_coro = self.entity_extraction_func(
+                inserting_chunks,
+                knwoledge_graph_inst=self.chunk_entity_relation_graph,
+                entity_vdb=self.entities_vdb,
+                entity_vdb_new=self.entities_vdb_new,
+                relation_vdb=self.relations_vdb,
+                global_config=asdict(self),
+                using_amazon_bedrock=self.using_amazon_bedrock,
+            )
             try:
-                maybe_new_kg, maybe_new_hierarchy_node_names, _ = await asyncio.wait_for(
-                    self.entity_extraction_func(
-                        inserting_chunks,
-                        knwoledge_graph_inst=self.chunk_entity_relation_graph,
-                        entity_vdb=self.entities_vdb,
-                        entity_vdb_new=self.entities_vdb_new,
-                        relation_vdb=self.relations_vdb,
-                        global_config=asdict(self),
-                        using_amazon_bedrock=self.using_amazon_bedrock,
-                    ),
-                    timeout=21600  
-                )
+                if extraction_timeout is None:
+                    maybe_new_kg, maybe_new_hierarchy_node_names, _ = await extraction_coro
+                else:
+                    maybe_new_kg, maybe_new_hierarchy_node_names, _ = await asyncio.wait_for(
+                        extraction_coro,
+                        timeout=extraction_timeout,
+                    )
             except asyncio.TimeoutError:
-                logger.error("Entity extraction timed out after 6 hours. This may indicate an issue with the LLM or network connectivity, or the dataset is too large.")
+                if extraction_timeout is None:
+                    logger.error(
+                        "Entity extraction timed out unexpectedly while stage timeout was disabled."
+                    )
+                else:
+                    logger.error(
+                        "Entity extraction timed out after %.2f hours (%.0f seconds). "
+                        "Increase entity_extraction_timeout, reduce num_docs, or improve LLM throughput.",
+                        extraction_timeout / 3600,
+                        extraction_timeout,
+                    )
                 raise
             if maybe_new_kg is None:
                 logger.warning("No new entities found")

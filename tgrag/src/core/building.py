@@ -1065,7 +1065,7 @@ Output:"""
         else:
             percentage = 100
         print(
-            f"{now_ticks} Processed {already_processed}({percentage}%) chunks,  {already_entities} entities(duplicated), {already_relations} relations(duplicated)\r",
+            f"{now_ticks} Processed {already_processed}/{total_chunks} ({percentage}%) chunks,  {already_entities} entities(duplicated), {already_relations} relations(duplicated)\r",
             end="",
             flush=True,
         )

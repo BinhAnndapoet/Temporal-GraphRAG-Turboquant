@@ -17,7 +17,7 @@ Tài liệu này là bản chi tiết đã khôi phục lại sau khi bản rút
 Bản rút gọn trước khi khôi phục được sao lưu tại:
 
 ```text
-/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/md/debug_localLLM_log_results_summary_backup.md
+/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/md/debug/debug_localLLM_log_results_summary_backup.md
 ```
 
 ## Tổng quan trước mục lục: local LLM + TurboQuant đang vướng gì?
@@ -1322,9 +1322,9 @@ Nếu một entity như `2023`, `CHINA`, `FREE CASH FLOW`, `2021-Q2` gom quá nh
 
 Repo Turboquant hiện tại đã có runtime print. Khi chạy phải giữ dòng này trong log để tránh nhầm như TH11A.
 
-### 16.4 Logging còn thiếu theo `add_runtime_logging_plan.md`
+### 16.4 Logging còn thiếu theo `md/debug/add_runtime_logging_plan.md`
 
-File `add_runtime_logging_plan.md` đang đúng hướng là cần runtime log chi tiết hơn, nhưng hiện vẫn thiếu các điểm quan trọng cho lỗi TH7/TH11A:
+File `md/debug/add_runtime_logging_plan.md` đang đúng hướng là cần runtime log chi tiết hơn, nhưng hiện vẫn thiếu các điểm quan trọng cho lỗi TH7/TH11A:
 
 - Log top-N `content` dài nhất trước khi gọi embedding.
 - Log namespace vector đang upsert: `entities`, `entities_new`, `relations`.

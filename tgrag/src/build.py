@@ -310,6 +310,7 @@ def create_temporal_graphrag_from_config(
         chunk_token_size=config.get('chunk_size', 1200),
         chunk_overlap_token_size=config.get('chunk_overlap', 100),
         disable_entity_summarization=config.get('disable_entity_summarization', False),
+        entity_extraction_timeout=config.get('entity_extraction_timeout', 21600.0),
         embedding_func=embedding_func,
         embedding_provider=embedding_provider,
         embedding_model=embedding_model,

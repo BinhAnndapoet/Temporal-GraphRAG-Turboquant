@@ -170,6 +170,7 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
     embedding_batch_num = args.embedding_batch_num
     embedding_max_async = args.embedding_max_async
     embedding_prefix = args.embedding_prefix
+    entity_extraction_timeout = args.entity_extraction_timeout
     if embedding_provider == "huggingface":
         embedding_base_url = None
 
@@ -202,6 +203,8 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         override_config["cheap_model_max_async"] = llm_max_async
     if llm_timeout:
         override_config["llm_timeout"] = llm_timeout
+    if entity_extraction_timeout is not None:
+        override_config["entity_extraction_timeout"] = entity_extraction_timeout
 
     if not any([
         provider,
@@ -220,6 +223,7 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         embedding_prefix,
         llm_max_async,
         llm_timeout,
+        entity_extraction_timeout is not None,
     ]):
         return {}
 
@@ -241,6 +245,7 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         "embedding_prefix": embedding_prefix,
         "llm_max_async": llm_max_async,
         "llm_timeout": llm_timeout,
+        "entity_extraction_timeout": entity_extraction_timeout,
         "wire_protocol": wire_protocol,
         "api_key": api_key,
     }
@@ -256,6 +261,11 @@ def print_runtime(runtime_config: Dict) -> None:
         f"wire_protocol={runtime_config['wire_protocol']}"
     )
     print(f"[runtime] llm_base_url={runtime_config['llm_base_url']}")
+    print(
+        f"[runtime] llm_max_async={runtime_config.get('llm_max_async')} "
+        f"llm_timeout={runtime_config.get('llm_timeout')} "
+        f"entity_extraction_timeout={runtime_config.get('entity_extraction_timeout')}"
+    )
     print(
         f"[runtime] embedding_provider={runtime_config['embedding_provider']} "
         f"embedding_base_url={runtime_config['embedding_base_url']}"
@@ -623,6 +633,12 @@ def main():
         type=float,
         default=None,
         help='Override LLM request timeout in seconds. Defaults to 600 for --local_llm_backend turboquant'
+    )
+    parser.add_argument(
+        '--entity_extraction_timeout',
+        type=float,
+        default=None,
+        help='Timeout in seconds for the full entity extraction stage. Use 0 to disable the stage timeout.'
     )
     
     args = parser.parse_args()

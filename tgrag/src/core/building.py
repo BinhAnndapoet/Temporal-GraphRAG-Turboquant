@@ -616,20 +616,20 @@ async def _merge_temporal_edges_then_upsert(
     logger.info(f"upsert {timestamp_id} and {src_id} edge")
 
     # add timestamp and entity edge
-    await knwoledge_graph_inst.upsert_edge(
-        timestamp_id,
-        tgt_id,
-        edge_data=dict(
-            description=dict(), source_id=already_source_ids, order=order
-        ),
-    )
-    await knwoledge_graph_inst.upsert_edge(
-        timestamp_id,
-        src_id,
-        edge_data=dict(
-            description=dict(), source_id=already_source_ids, order=order
-        ),
-    )
+    # await knwoledge_graph_inst.upsert_edge(
+    #     timestamp_id,
+    #     tgt_id,
+    #     edge_data=dict(
+    #         description=dict(), source_id=already_source_ids, order=order
+    #     ),
+    # )
+    # await knwoledge_graph_inst.upsert_edge(
+    #     timestamp_id,
+    #     src_id,
+    #     edge_data=dict(
+    #         description=dict(), source_id=already_source_ids, order=order
+    #     ),
+    # )
     edge_data = dict(
             description=already_description, source_id=already_source_ids, order=order
         )

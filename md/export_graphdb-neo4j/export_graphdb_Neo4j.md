@@ -358,6 +358,8 @@ manifest.json
 
 ## Tạo script nếu chưa có
 
+> Lưu ý: script bên dưới đã được cập nhật để **giữ `description_json`/`source_id_json`** nhưng **sanitize dữ liệu trước khi ghi CSV** và xuất CSV với `QUOTE_ALL` để Neo4j `LOAD CSV` không bị vỡ vì dấu quote/newline/backslash trong dữ liệu thực tế.
+
 ```bash
 cd ~/Projects/Research/Temporal-GraphRAG-Turboquant
 
@@ -365,94 +367,139 @@ mkdir -p scripts/graph_database
 
 cat > scripts/graph_database/export_temporal_graphrag_to_tables.py <<'PY'
 import argparse
+import csv
 import json
+import logging
 import networkx as nx
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
 
+logger = logging.getLogger("tgrag.graphdb_export")
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Export Temporal-GraphRAG output to CSV for Neo4j")
-    parser.add_argument("--working_dir", required=True, help="Folder output graph đã build, ví dụ ./outputs/build_graph/<BUILD_CASE>")
-    parser.add_argument("--export_dir", required=True, help="Folder lưu CSV/Cypher export")
-    parser.add_argument("--graph_run_id", required=True, help="ID định danh cho lần export/import này")
-    parser.add_argument("--overwrite", action="store_true", help="Ghi đè nếu folder export đã tồn tại")
+  parser.add_argument("--working_dir", required=True, help="Folder output graph đã build (VD: ./output_ollama)")
+  parser.add_argument("--export_dir", required=True, help="Folder lưu CSV export")
+  parser.add_argument("--graph_run_id", required=True, help="ID định danh cho lần chạy này")
+  parser.add_argument("--overwrite", action="store_true", help="Ghi đè nếu folder export đã tồn tại")
+  parser.add_argument("--log_file", help="File log cho riêng bước Python export; workflow shell vẫn nên dùng tee để capture Docker/Cypher")
     return parser.parse_args()
+
+def setup_logging(log_file=None):
+  handlers = [logging.StreamHandler()]
+  if log_file:
+    log_path = Path(log_file)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handlers.append(logging.FileHandler(log_path, mode="a", encoding="utf-8"))
+
+  logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=handlers,
+    force=True,
+  )
+
+def file_info(path: Path) -> str:
+  stat = path.stat()
+  return f"{path} size={stat.st_size} bytes mtime={datetime.fromtimestamp(stat.st_mtime).isoformat()}"
+
+def normalize_csv_value(value):
+  if value is None:
+    return ""
+  if isinstance(value, (dict, list)):
+    return json.dumps(value, ensure_ascii=False)
+  return str(value).replace("\r", " ").replace("\n", " ").strip()
+
+def df_from_rows(rows):
+  return pd.DataFrame(rows)
+
+def write_csv(df, path: Path):
+  df.to_csv(
+    path,
+    index=False,
+    encoding="utf-8",
+    quoting=csv.QUOTE_ALL,
+    escapechar="\\",
+  )
 
 def safe_load_json(path: Path):
     if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
+    with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
     return {}
 
 def main():
     args = parse_args()
+  setup_logging(args.log_file)
+
+  start_time = datetime.now()
+  logger.info("===== START GRAPHDB EXPORT =====")
+  logger.info("graph_run_id=%s", args.graph_run_id)
+  logger.info("working_dir=%s", args.working_dir)
+  logger.info("export_dir=%s", args.export_dir)
+  if args.log_file:
+    logger.info("log_file=%s", args.log_file)
+
     work_dir = Path(args.working_dir)
     export_dir = Path(args.export_dir)
 
-    # 1. Validate input
+  # 1. Validate Input
     req_files = [
         "graph_chunk_entity_relation.graphml",
-        "kv_store_full_docs.json",
-        "kv_store_text_chunks.json",
+    "kv_store_full_docs.json",
+    "kv_store_text_chunks.json"
     ]
-
+  logger.info("Checking required input files")
     for f in req_files:
-        if not (work_dir / f).exists():
-            raise FileNotFoundError(f"[Error] Thiếu file bắt buộc: {work_dir / f}")
+    path = work_dir / f
+    if not path.exists():
+      logger.error("Missing required file: %s", path)
+      raise FileNotFoundError(f"[Error] Thiếu file bắt buộc: {path}")
+    logger.info("input %s", file_info(path))
 
     if export_dir.exists() and not args.overwrite:
         raise FileExistsError(f"Folder {export_dir} đã tồn tại. Dùng --overwrite để ghi đè.")
 
     export_dir.mkdir(parents=True, exist_ok=True)
+  logger.info("Export directory ready: %s", export_dir)
 
-    print(f"[*] Đang đọc dữ liệu từ: {work_dir}")
+  logger.info("Reading graph and KV stores from: %s", work_dir)
 
     # 2. Read GraphML and JSON
     entity_graph = nx.read_graphml(work_dir / "graph_chunk_entity_relation.graphml")
     full_docs = safe_load_json(work_dir / "kv_store_full_docs.json")
     text_chunks = safe_load_json(work_dir / "kv_store_text_chunks.json")
 
+  logger.info(
+    "Loaded graph nodes=%s edges=%s full_docs=%s text_chunks=%s",
+    entity_graph.number_of_nodes(),
+    entity_graph.number_of_edges(),
+    len(full_docs),
+    len(text_chunks),
+  )
+
     # 3. Build CSV tables
 
     # 3.1. Documents
-    docs_data = [
-        {
-            "graph_run_id": args.graph_run_id,
-            "id": str(k),
-            "title": f"Doc {k}",
-            "doc": str(v),
-        }
-        for k, v in full_docs.items()
-    ]
+  docs_data = [{"graph_run_id": args.graph_run_id, "id": normalize_csv_value(k), "title": normalize_csv_value(f"Doc {k}"), "doc": normalize_csv_value(v)} for k, v in full_docs.items()]
 
     # 3.2. Chunks
-    chunks_data = [
-        {
-            "graph_run_id": args.graph_run_id,
-            "id": str(k),
-            "full_doc_id": str(v.get("full_doc_id", "doc_0")),
-            "tokens": int(v.get("tokens", 0)),
-            "content": v.get("content", ""),
-        }
-        for k, v in text_chunks.items()
-    ]
+  chunks_data = [{"graph_run_id": args.graph_run_id, "id": normalize_csv_value(k), "full_doc_id": normalize_csv_value(v.get("full_doc_id", "doc_0")), "tokens": int(v.get("tokens", 0) or 0), "content": normalize_csv_value(v.get("content", ""))} for k, v in text_chunks.items()]
 
     # 3.3. Entity nodes and node-chunk provenance links
     nodes_data = []
     node_chunk_links = []
 
     for node_id, data in entity_graph.nodes(data=True):
-        node_id_str = str(node_id)
-
         nodes_data.append(
             {
                 "graph_run_id": args.graph_run_id,
-                "id": node_id_str,
-                "name": data.get("id", node_id_str),
-                "entity_type": data.get("entity_type", "UNKNOWN"),
-                "description": data.get("description", ""),
-                "source_id": data.get("source_id", ""),
+        "id": normalize_csv_value(node_id),
+        "name": normalize_csv_value(data.get("id", str(node_id))),
+        "entity_type": normalize_csv_value(data.get("entity_type", "UNKNOWN")),
+        "description": normalize_csv_value(data.get("description", "")),
+        "source_id": normalize_csv_value(data.get("source_id", "")),
             }
         )
 
@@ -463,8 +510,8 @@ def main():
                 node_chunk_links.append(
                     {
                         "graph_run_id": args.graph_run_id,
-                        "node_id": node_id_str,
-                        "chunk_id": src,
+            "node_id": normalize_csv_value(node_id),
+            "chunk_id": normalize_csv_value(src),
                     }
                 )
 
@@ -472,25 +519,44 @@ def main():
     edges_data = []
 
     for u, v, data in entity_graph.edges(data=True):
+    description_value = data.get("description", "")
+    source_id_value = data.get("source_id", "")
+    if isinstance(description_value, (dict, list)):
+      description_value = json.dumps(description_value, ensure_ascii=False)
+    if isinstance(source_id_value, (dict, list)):
+      source_id_value = json.dumps(source_id_value, ensure_ascii=False)
+
         edges_data.append(
             {
                 "graph_run_id": args.graph_run_id,
-                "source_id": str(u),
-                "target_id": str(v),
+        "source_id": normalize_csv_value(u),
+        "target_id": normalize_csv_value(v),
                 "relationship_type": "RELATED",
-                "description_json": data.get("description", ""),
-                "source_id_json": data.get("source_id", ""),
+        "description_json": normalize_csv_value(description_value),
+        "source_id_json": normalize_csv_value(source_id_value),
             }
         )
 
-    # 4. Write CSV files
-    print(f"[*] Đang ghi CSV ra: {export_dir}")
+  logger.info(
+    "Prepared rows docs=%s chunks=%s entity_nodes=%s entity_relationships=%s node_chunk_links=%s",
+    len(docs_data),
+    len(chunks_data),
+    len(nodes_data),
+    len(edges_data),
+    len(node_chunk_links),
+  )
 
-    pd.DataFrame(docs_data).to_csv(export_dir / "docs.csv", index=False)
-    pd.DataFrame(chunks_data).to_csv(export_dir / "chunks.csv", index=False)
-    pd.DataFrame(nodes_data).to_csv(export_dir / "entity_nodes.csv", index=False)
-    pd.DataFrame(edges_data).to_csv(export_dir / "entity_relationships.csv", index=False)
-    pd.DataFrame(node_chunk_links).to_csv(export_dir / "node_chunk_links.csv", index=False)
+    # 4. Write CSV files
+  logger.info("Writing CSV files to: %s", export_dir)
+
+  write_csv(df_from_rows(docs_data), export_dir / "docs.csv")
+  write_csv(df_from_rows(chunks_data), export_dir / "chunks.csv")
+  write_csv(df_from_rows(nodes_data), export_dir / "entity_nodes.csv")
+  write_csv(df_from_rows(edges_data), export_dir / "entity_relationships.csv")
+  write_csv(df_from_rows(node_chunk_links), export_dir / "node_chunk_links.csv")
+
+  for csv_name in ["docs.csv", "chunks.csv", "entity_nodes.csv", "entity_relationships.csv", "node_chunk_links.csv"]:
+    logger.info("output %s", file_info(export_dir / csv_name))
 
     # 5. Write Neo4j import Cypher
     cypher_script = f"""// 1. Constraints
@@ -535,6 +601,8 @@ MERGE (e)-[:MENTIONED_IN]->(c);
     with open(export_dir / "neo4j_import.cypher", "w", encoding="utf-8") as f:
         f.write(cypher_script)
 
+  logger.info("output %s", file_info(export_dir / "neo4j_import.cypher"))
+
     # 6. Write manifest
     manifest = {
         "graph_run_id": args.graph_run_id,
@@ -549,9 +617,12 @@ MERGE (e)-[:MENTIONED_IN]->(c);
     }
 
     with open(export_dir / "manifest.json", "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=4, ensure_ascii=False)
+    json.dump(manifest, f, indent=4)
 
-    print("[Success] Export thành công! Đã tạo manifest.json và neo4j_import.cypher.")
+  logger.info("output %s", file_info(export_dir / "manifest.json"))
+
+  elapsed = (datetime.now() - start_time).total_seconds()
+  logger.info("[Success] Export thành công! Đã tạo manifest và neo4j_import.cypher. elapsed_seconds=%.2f", elapsed)
 
 if __name__ == "__main__":
     main()

@@ -14,10 +14,15 @@ TG-RAG là hệ thống RAG có yếu tố thời gian, nên đánh giá không 
 3. **Incremental Evaluation**: corpus được cập nhật theo thời gian, cần đo stability và adaptability.
 4. **Cost / Ablation**: đo chi phí indexing/update và kiểm tra thành phần nào đóng góp vào performance.
 
-Khi thêm **TurboQuant**, ta bổ sung thêm nhóm metric hiệu năng:
+Khi thêm **TurboQuant**, ta bổ sung thêm nhóm metric mở rộng:
 
-5. **Retrieval Quality / Diagnostic Metrics**: metric debug xem evidence retrieve đúng, đủ, đúng thời gian hay chưa.
+5. **Graph Build & Retrieval Diagnostics**: metric để đo build graph nhanh/chuẩn tới mức nào và evidence retrieval có đúng temporal scope không.
 6. **Efficiency + Quality Retention với TurboQuant**: đo latency, throughput, VRAM, update time và chất lượng sau quantization.
+
+Nói ngắn gọn theo đúng tinh thần seminar:
+
+- **Paper TG-RAG gốc**: đo build graph chủ yếu **gián tiếp** qua indexing/update cost, ablation temporal indexing và downstream QA.
+- **Khi tích hợp TurboQuant**: cần đo build graph **trực tiếp hơn** (efficiency + construction quality + coverage/structure) để thấy rõ trade-off tốc độ/chất lượng.
 
 > Lưu ý phân loại: nhóm 1–4 bám sát paper TG-RAG gốc. Nhóm 5 và 6 là nhóm metric mở rộng để phục vụ việc triển khai lại, debug hệ thống và so sánh khi tích hợp TurboQuant.
 
@@ -31,7 +36,7 @@ Khi thêm **TurboQuant**, ta bổ sung thêm nhóm metric hiệu năng:
 | **2. Abstract QA** | Paper gốc | Comprehensiveness, Diversity, Temporal Coverage, Overall Winner | Câu trả lời tổng hợp có đầy đủ, đa dạng, đúng timeline không | Abstract / global temporal QA |
 | **3. Incremental Evaluation** | Paper gốc | Base queries on base corpus, base queries on updated corpus, new queries on updated corpus, Index/Update Token Cost | Hệ thống có ổn định sau update và thích nghi với dữ liệu mới không | Evolving corpus / update scenario |
 | **4. Ablation Study** | Paper gốc | Full TG-RAG, w/o PPR, w/o Temporal Retrieval, w/o Temporal Indexing | Thành phần nào trong TG-RAG đóng góp nhiều vào performance | Phân tích cơ chế, không chỉ báo cáo kết quả |
-| **5. Retrieval Quality / Diagnostics** | Bổ sung triển khai | Evidence Recall, Evidence Precision, Temporal Evidence Accuracy, Path Coverage, Context Efficiency | Evidence retrieve có đúng, đủ, đúng thời gian và đủ reasoning path không | Debug retriever, temporal filtering, context construction |
+| **5. Graph Build & Retrieval Diagnostics** | Bổ sung triển khai | Build time, extraction throughput, quadruple validity, timestamp accuracy, grounding rate, coverage, Evidence Recall/Precision/TEA | Graph build có nhanh/ổn định không và evidence retrieve có đúng temporal scope không | Debug indexing + retriever + temporal filtering |
 | **6. TurboQuant Efficiency** | Bổ sung khi tích hợp TurboQuant | Latency, Throughput, VRAM usage, Indexing/update time, Quality Retention, Quality Drop | TurboQuant có tối ưu inference mà vẫn giữ chất lượng temporal QA không | So sánh model gốc vs model quantized |
 
 ---
@@ -398,25 +403,54 @@ Bỏ temporal retrieval làm Correct giảm 0.217 điểm tuyệt đối.
 
 ---
 
-# Nhóm 5 — Retrieval Quality / Diagnostic Metrics
+# Nhóm 5 — Graph Build & Retrieval Diagnostics
 
 ## 5.1. Vì sao cần nhóm này?
 
-Nhóm này không phải bảng metric chính trong paper gốc, nhưng rất quan trọng nếu bạn triển khai TG-RAG hoặc apply TurboQuant. Lý do: answer sai có thể do generator yếu, nhưng cũng có thể do retriever lấy evidence sai.
+Paper gốc không định nghĩa một metric đơn lẻ tên “graph build quality”. Thay vào đó, build/indexing được phản ánh qua cost, ablation và chất lượng QA downstream.
+
+Khi triển khai thực tế (đặc biệt lúc tích hợp TurboQuant), nên tách nhóm diagnostic rõ hơn để trả lời 3 câu hỏi:
+
+1. Build graph có nhanh và tiết kiệm hơn không?
+2. Graph tạo ra có còn đúng/grounded không?
+3. Retrieval có lấy đúng evidence theo temporal scope không?
 
 Do đó cần đo riêng:
 
 ```text
-Evidence có đúng không?
-Evidence có đủ không?
-Evidence có đúng temporal scope không?
-Evidence có đủ reasoning path không?
-Context đưa vào LLM có hiệu quả không?
+Build có nhanh/tiết kiệm không?
+Graph có đúng, grounded, đủ phủ không?
+Evidence retrieval có đúng temporal scope và reasoning path không?
 ```
 
 ---
 
-## 5.2. Bảng metric retrieval quality
+## 5.2. Layer A — Graph Build Efficiency
+
+| Metric | Đo gì? | Công thức / cách tính | Ý nghĩa |
+|---|---|---|---|
+| **Indexing Time ↓** | Tổng thời gian build graph/index | `T_index = T_extract + T_graph + T_report + T_store` | Đánh giá chi phí build end-to-end |
+| **Extraction Time per Chunk ↓** | Tốc độ extract fact theo chunk | `T_per_chunk = T_extract / N_chunks` | So sánh độ nhanh stage LLM extraction |
+| **LLM Calls / Tokens ↓** | Chi phí gọi LLM khi build | Đếm `api_calls`, `prompt_tokens`, `completion_tokens` | Đo cost indexing/update |
+| **Build Throughput ↑** | Mức xử lý chunk theo thời gian | `Throughput = N_chunks / T_extract` | Đo thông lượng build |
+| **Peak VRAM ↓** | Bộ nhớ GPU đỉnh | Log từ GPU monitor | Đo lợi ích quantization |
+| **Build Speedup ↑** | TurboQuant nhanh hơn baseline bao nhiêu | `Speedup = T_original / T_quantized` | Chỉ số optimization cốt lõi |
+
+---
+
+## 5.3. Layer B — Graph Construction Quality
+
+| Metric | Đo gì? | Công thức / cách tính | Ý nghĩa |
+|---|---|---|---|
+| **Temporal Quadruple Validity ↑** | Tuple `(v1, v2, e, τ)` có hợp lệ không | `valid_quadruples / total_quadruples` | Đo chất lượng extraction lõi |
+| **Timestamp Normalization Accuracy ↑** | Chuẩn hóa mốc thời gian đúng không | Rule/gold/manual check | Đo temporal correctness |
+| **Evidence Grounding Rate ↑** | Fact có link về source chunk/doc không | `% facts có source_id/chunk_id` | Giảm risk hallucinated graph |
+| **Duplicate Entity Rate ↓** | Mức trùng node entity chưa canonicalize | `duplicate_entities / total_entities` | Đo chất lượng merge entity |
+| **Temporal Edge Coverage ↑** | Quan hệ có timestamp hợp lệ hay không | `edges_with_valid_time / total_edges` | Đo độ phủ temporal relation |
+
+---
+
+## 5.4. Layer C — Retrieval Diagnostics
 
 | Metric | Đo gì? | Đo ra sao? | Công thức / cách tính | Ví dụ | Ý nghĩa |
 |---|---|---|---|---|---|
@@ -428,7 +462,19 @@ Context đưa vào LLM có hiệu quả không?
 
 ---
 
-## 5.3. Ví dụ Temporal Evidence Accuracy
+## 5.5. Layer D — Graph Coverage / Structure
+
+| Metric | Đo gì? | Công thức / cách tính | Ý nghĩa |
+|---|---|---|---|
+| **Document Coverage ↑** | Bao nhiêu doc đóng góp facts | `docs_with_facts / total_docs` | Đo độ phủ extraction theo tài liệu |
+| **Chunk Coverage ↑** | Bao nhiêu chunk tạo entities/relations | `chunks_with_facts / total_chunks` | Đo độ phủ extraction theo chunk |
+| **#Nodes / #Edges / #Time-nodes** | Quy mô graph | Đếm trong graph DB/export tables | Quan sát tình trạng graph quá nhỏ/quá nhiễu |
+| **Isolated Node Ratio ↓** | Tỷ lệ node rời rạc | `isolated_nodes / total_nodes` | Phát hiện graph connectivity yếu |
+| **Average Degree** | Mức kết nối trung bình | tùy directed/undirected definition | Đánh giá connectivity tổng thể |
+
+---
+
+## 5.6. Ví dụ Temporal Evidence Accuracy
 
 Query:
 

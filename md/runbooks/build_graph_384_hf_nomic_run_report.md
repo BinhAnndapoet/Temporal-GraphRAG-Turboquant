@@ -1,4 +1,31 @@
-# Báo Cáo Run 384 Docs: 7B TurboQuant + HuggingFace Nomic Embedding
+# Báo Cáo Run 384 Docs (v2): 7B TurboQuant + HuggingFace Nomic Embedding
+
+> Đây là bản **v2** cho run 7B, bổ sung rõ phần kết quả export Neo4j và trạng thái chất lượng community reports.
+>
+> **Lưu ý naming/version:** canonical path để review version là
+> `md/runbooks/build_graph_384_hf_nomic_run_report_v2.md`.
+> File hiện tại được giữ để tương thích link cũ.
+
+---
+
+## V2 Snapshot (7B)
+
+### Trạng thái tổng quan
+
+- Build 384 docs: **PASS kỹ thuật** (graph/vector/docs đã persist)
+- Community reports: **chưa clean** (vẫn còn lỗi do context overflow ở một số community lớn)
+- Export Neo4j package: **đã hoàn tất và verify**
+
+### Neo4j export evidence (v2)
+
+- `graph_run_id`: `BUILD_qwen25_7b_p4_c131072_hf_nomic_cuda_384docs_fresh-v2_neo4j_20260526_235707`
+- `docs=384`, `chunks=1462`, `entity_nodes=18722`, `entity_relationships=15222`, `node_chunk_links=35861`
+- Temporal nodes (`DATE|MONTH|QUARTER|YEAR`): `195`
+- Edges chạm temporal nodes: `517`
+
+Chi tiết đầy đủ nằm trong file:
+
+- `md/export_graphdb-neo4j/neo4j_export_results_7b_v2.md`
 
 Tài liệu này ghi lại run full 384 docs mới nhất của `Temporal-GraphRAG-Turboquant` sau khi chuyển embedding từ Ollama sang HuggingFace Nomic. Mục tiêu là có một file tra cứu nhanh: chạy bằng lệnh/cấu hình nào, log nằm ở đâu, output nằm ở đâu, đã pass tới đâu, còn lỗi gì, và resume hiện tại có giúp chạy tiếp được không.
 

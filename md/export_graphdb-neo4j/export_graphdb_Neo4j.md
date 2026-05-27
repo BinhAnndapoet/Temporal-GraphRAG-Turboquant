@@ -16,6 +16,14 @@ Phiên bản này đã được chỉnh lại theo lỗi thực tế đã gặp:
 
 ---
 
+## Kết quả export thực tế (7B v2)
+
+Nếu cần xem nhanh **số liệu export đã verify** (docs/chunks/entity/relations + temporal evidence), đọc thêm:
+
+- `md/export_graphdb-neo4j/neo4j_export_results_7b_v2.md`
+
+---
+
 ## 0. Mô hình chạy đúng
 
 ### Mục tiêu

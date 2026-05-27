@@ -47,6 +47,13 @@ File này giúp bạn biết nên đọc gì trước, theo đúng mục tiêu l
 
 ## 5) Bản đồ nhanh theo thư mục (rõ trách nhiệm)
 
+### Ghi chú về 2 file nằm ở `md/` gốc
+
+- `md/README_MD.md` là **cổng điều hướng trung tâm** của toàn bộ thư mục `md/`, nên nó phải nằm ở root để dễ tìm.
+- `md/NAMING_VERSIONING_CONVENTION.md` là **tài liệu governance** dùng chung cho mọi subfolder, nên cũng nên nằm ở root thay vì gắn vào một nhóm riêng.
+
+Hai file này không phải tài liệu nghiệp vụ của riêng `CLI/`, `runbooks/` hay `metrics/`; chúng là lớp điều phối chung cho toàn bộ `md/`.
+
 ```text
 md/
 ├── CLI/

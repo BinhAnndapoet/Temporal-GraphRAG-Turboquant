@@ -2,6 +2,8 @@
 
 Mục tiêu: giúp đọc nhanh tài liệu nào là bản mới nhất, tránh nhầm file cũ/mới.
 
+> File này được đặt ở `md/` gốc có chủ đích, vì đây là quy ước áp dụng cho **toàn bộ** tài liệu con trong `md/`.
+
 ---
 
 ## 1) Quy tắc tên file chuẩn

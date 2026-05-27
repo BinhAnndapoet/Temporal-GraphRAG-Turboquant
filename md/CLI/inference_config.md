@@ -253,6 +253,8 @@ Nếu community report quá dài hoặc decode quá lâu, có thể giảm `--n-
 
 Embedding chỉ ảnh hưởng giai đoạn vector upsert, không thay đổi LLM extraction.
 
+Lưu ý quan trọng: `embedding_max_async` là số batch embedding chạy song song, **không phải** số request LLM. Tăng nó chỉ có ích khi embedding đang là nút thắt cổ chai và máy còn tài nguyên rảnh.
+
 ### 8.1 CPU embedding
 
 ```text
@@ -266,11 +268,13 @@ Embedding chỉ ảnh hưởng giai đoạn vector upsert, không thay đổi LL
 - Không tranh VRAM với `llama-server`.
 - Ổn định hơn cho 14B.
 - Ít rủi ro OOM.
+- Thường là lựa chọn an toàn nhất khi GPU đang phải phục vụ cả extraction/community report.
 
 Nhược điểm:
 
 - Embedding compute chậm hơn.
 - Có thể làm `entity_vdb.upsert` và `relation_vdb.upsert` lâu hơn.
+- Nếu chỉ nhìn riêng tốc độ embedding thì CPU thường chậm hơn GPU, nhưng tổng thể pipeline lại ổn hơn khi GPU đã bận.
 
 ### 8.2 GPU embedding
 
@@ -284,11 +288,13 @@ Nhược điểm:
 
 - Embedding nhanh hơn CPU.
 - Có lợi khi entity/relation nhiều.
+- Chỉ đáng cân nhắc khi `llama-server` chưa ăn hết VRAM hoặc bạn benchmark thấy còn headroom rõ ràng.
 
 Nhược điểm:
 
 - Tranh VRAM với `llama-server`.
 - Có rủi ro OOM hoặc làm GPU queue nặng hơn.
+- Nếu GPU đã gần đầy vì LLM server, embedding trên GPU có thể làm cả pipeline chậm hơn hoặc bất ổn hơn do tranh tài nguyên.
 
 Với trạng thái đã kiểm:
 
@@ -299,15 +305,31 @@ còn khoảng 6.4GB VRAM
 GPU util gần 97%
 ```
 
-Khuyến nghị cho 7B full 384:
+Khuyến nghị mặc định cho workflow này:
 
 ```text
---embedding_device cuda
+--embedding_device cpu
 --embedding_batch_size 8
 --embedding_max_async 1
 ```
 
-Không tăng `embedding_max_async` lên `2` trong run đầu, vì GPU đã bận gần tối đa.
+### 8.3 Nên để `embedding_max_async` bao nhiêu?
+
+Khuyến nghị thực tế:
+
+```text
+GPU LLM server đang chạy: embedding_max_async = 1
+CPU embedding:            embedding_max_async = 1 hoặc 2 nếu RAM/CPU còn dư
+GPU embedding rảnh VRAM:   có thể thử 2, nhưng chỉ sau khi benchmark
+```
+
+Vì sao?
+
+- `embedding_max_async = 1` giúp tránh nhiều batch embedding tranh tài nguyên với request LLM.
+- Tăng lên `2` chỉ có ích khi embedding là nút thắt cổ chai rõ ràng; nếu không, nó chỉ tạo thêm queue và overhead.
+- Với workflow của bạn, ưu tiên là pipeline ổn định trước, tối ưu sau.
+
+Nếu bạn muốn giữ cấu hình cũ để chạy lại, nên giữ `embedding_device cpu` và `embedding_max_async 1` trước; sau đó mới test GPU embedding riêng biệt ở một run mới.
 
 ---
 

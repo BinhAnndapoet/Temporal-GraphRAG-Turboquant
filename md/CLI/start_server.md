@@ -16,6 +16,34 @@ Embedding có thể chạy riêng qua Ollama hoặc HuggingFace trong `build_gra
 
 ---
 
+## 0. Quy Ước Đặt Tên Để Copy Dễ
+
+Để tránh nhầm giữa server / build / query, nên giữ tên theo mẫu sau:
+
+```text
+SERVER_<model>_<ctx>_<np>_<profile>
+BUILD_<model>_<ctx>_<np>_<embed>_<docs>
+```
+
+Ví dụ:
+
+```text
+SERVER_qwen25_7b_p2_c64k_np3072
+BUILD_qwen25_7b_p2_c64k_np3072_hf_nomic_384docs
+```
+
+Nếu muốn giữ lại cấu hình cũ để chạy lại sau này, chỉ cần copy nguyên block cũ sang một tên run mới, ví dụ thêm hậu tố:
+
+```text
+..._v1
+..._v2
+..._retry
+```
+
+Điều này giúp bạn giữ nguyên profile cũ nhưng vẫn biết run nào là bản thử lại.
+
+---
+
 ## 1. Chọn Profile Nào?
 
 Với GPU RTX 5070 Ti 16GB, ưu tiên như sau:
@@ -35,6 +63,8 @@ build_graph.py --llm_max_async N
 ```
 
 Nếu server alias là `qwen25-...-p2...` thì `build_graph.py --model` phải dùng đúng alias đó.
+
+Nếu bạn đổi sang timeout dài hơn ở build, hãy ghi rõ luôn trong tên run để khỏi lẫn với config cũ.
 
 ---
 
@@ -210,6 +240,8 @@ Build graph phải đổi theo:
 --llm_max_async 1
 ```
 
+Nếu bạn muốn giữ cấu hình cũ, hãy giữ nguyên `--parallel 1` và `--llm_max_async 1`; chỉ đổi timeout ở build, không cần đổi server.
+
 ### 4.2 14B Q5 p1/c32k
 
 Tạo tmux:
@@ -255,6 +287,8 @@ Build graph phải đổi theo:
 --model qwen3-14b-q5-ctkq8-ctvturbo3-c32k-p1-np4096
 --llm_max_async 1
 ```
+
+Với run 14B, nếu bạn chỉ muốn chạy lại cùng cấu hình cũ nhưng cho phép extraction lâu hơn, chỉ cần tăng `--entity_extraction_timeout` ở build; server không cần đổi nếu alias và `--parallel` vẫn giữ nguyên.
 
 ---
 

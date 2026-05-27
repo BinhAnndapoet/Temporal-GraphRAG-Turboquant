@@ -46,10 +46,6 @@ Các lỗi cũ cần tránh:
 | Lỗi | Run kiểm chứng | Nguyên nhân | Hướng tránh |
 |---|---|---|---|
 | Community report vượt context | 7B p4 50 docs, 14B p2/c32k 50 docs | `--parallel` chia context thành slot nhỏ, prompt community dài | Dùng p2/c64k cho 7B; nếu còn lỗi thì p1 |
-| Ollama embedding input quá dài | 14B Q5 100 docs, TH11A 384 | Entity description sau merge quá dài | Dùng HF embedding + `--embedding_max_chars` |
-| Qwen3 14B Q8 OOM | TH8/TH11 Q8 | 16GB VRAM không đủ cho Q8 + KV | Dùng Q5 |
-| Output incomplete | 7B 100 cũ, 14B 100 fail embedding, 14B 384 incomplete | Fail trước persist cuối | Chỉ pass khi đủ full docs/chunks/vector/community/GraphML |
-
 ---
 
 ## 2. Chuẩn Bị Môi Trường HuggingFace Embedding
@@ -87,15 +83,45 @@ Giải thích nhanh ngay tại lệnh:
 ImportError: ... requires ... einops
 ```
 
-HF token:
+### 1.1 Timeout 43200 cho entity extraction
+
+Nếu bạn muốn giữ nguyên cấu hình cũ nhưng cho phép extraction chạy lâu hơn, chỉ cần tăng timeout stage này lên `43200` giây.
 
 ```bash
-# Không bắt buộc với nomic-ai/nomic-embed-text-v1.5 public.
-# Chỉ dùng nếu bị rate-limit hoặc model private/gated.
-export HF_TOKEN=hf_xxx
-# hoặc
-huggingface-cli login
+python -u build_graph.py \
+  --output_dir outputs/build_graph/BUILD_qwen25_7b_p2c64k_np3072_hf_nomic_384docs_timeout43200 \
+  --model qwen25-7b-q8-ctkq8-ctvturbo3-c64k-p2-np3072 \
+  --base_url http://localhost:8080/v1 \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --local_llm_backend turboquant \
+  --embedding_provider huggingface \
+  --embedding_model nomic-ai/nomic-embed-text-v1.5 \
+  --embedding_dim 768 \
+  --embedding_max_tokens 7500 \
+  --embedding_max_chars 24000 \
+  --embedding_device cpu \
+  --embedding_batch_size 16 \
+  --embedding_batch_num 16 \
+  --embedding_max_async 1 \
+  --embedding_prefix "search_document: " \
+  --chunk_size 1200 \
+  --chunk_overlap 100 \
+  --num_docs 384 \
+  --llm_max_async 2 \
+  --llm_timeout 1200 \
+  --entity_extraction_timeout 43200
 ```
+
+Lưu ý quan trọng:
+
+- Dùng đúng `--entity_extraction_timeout 43200`.
+- Không viết `- entity_extraction_timeout 43200` vì dấu `-` tách rời sẽ bị coi là arg lỗi.
+- Nếu bạn muốn giữ đúng cấu hình cũ, chỉ thay timeout này; còn server alias, `--parallel`, `--llm_max_async`, chunk size và embedding vẫn giữ nguyên.
+
+Giải thích nhanh ngay tại lệnh:
+
+- `--embedding_batch_size 16 --embedding_batch_num 16 --embedding_max_async 1`: giới hạn embedding concurrency để tránh nghẽn RAM/CPU hoặc tranh GPU.
+- `--entity_extraction_timeout 43200`: cho phép phase extract chạy tối đa 12 giờ trước khi dừng.
 
 Smoke test:
 

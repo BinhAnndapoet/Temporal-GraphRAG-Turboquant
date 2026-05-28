@@ -1,0 +1,36 @@
+# Test preset for 7B v2 community-report overflow fix
+# Use with: python -u build_graph.py --config tgrag/configs/config_7b_v2_community_fix.yaml ...
+
+building:
+  corpus_path: "./ect-qa/corpus/base.jsonl.gz"
+  working_dir: "./outputs/build_graph/BUILD_qwen25_7b_p4_c131072_hf_nomic_cuda_384docs_ctx24k_v1"
+  provider: "openai"
+  model: "qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072"
+
+  embedding_provider: "huggingface"
+  embedding_model: "nomic-ai/nomic-embed-text-v1.5"
+  embedding_dim: 768
+  embedding_max_tokens: 7500
+  embedding_max_chars: 24000
+  embedding_device: "cuda"
+  embedding_batch_size: 8
+  embedding_batch_num: 16
+  embedding_max_async: 1
+  embedding_prefix: "search_document: "
+
+  chunk_size: 1200
+  chunk_overlap: 100
+
+  enable_community_summary: true
+  best_model_max_token_size: 24000
+  best_model_max_async: 4
+  cheap_model_max_async: 4
+  entity_extract_max_gleaning: 0
+  disable_entity_summarization: true
+  max_graph_cluster_size: 8
+  entity_extraction_timeout: 43200
+  llm_timeout: 900
+
+  enable_incremental: false
+  preserve_communities: false
+  force_rebuild: false

@@ -20,6 +20,68 @@ Nếu terminal đã hiện `(turboquant)` thì chỉ cần `cd` vào repo là đ
 
 ---
 
+## Quick copy-paste
+
+### Mini check
+
+```bash
+python -u scripts/eval/judge_specific.py \
+  --predictions results/preds/pred_ctx24k_v2_hf_local384.jsonl \
+  --output results/judged/pred_ctx24k_v2_hf_local384_gemini.jsonl \
+  --judge_provider gemini \
+  --judge_model gemini-2.5-flash-lite \
+  --limit 20
+```
+
+### Batch vừa
+
+```bash
+python -u scripts/eval/judge_specific.py \
+  --predictions results/preds/pred_ctx24k_v2_hf_local384.jsonl \
+  --output results/judged/pred_ctx24k_v2_hf_local384_gemini.jsonl \
+  --judge_provider gemini \
+  --judge_model gemini-2.5-flash-lite \
+  --limit 50
+```
+
+### Batch lớn / nối tiếp
+
+```bash
+python -u scripts/eval/judge_specific.py \
+  --predictions results/preds/pred_ctx24k_v2_hf_local384.jsonl \
+  --output results/judged/pred_ctx24k_v2_hf_local384_gemini.jsonl \
+  --judge_provider gemini \
+  --judge_model gemini-2.5-flash-lite \
+  --limit 100 \
+  --resume
+```
+
+### Chạy metric summary non-LLM
+
+```bash
+python -u scripts/eval/run_metric_suite.py \
+  --predictions \
+  results/preds/pred_ctx24k_v2_hf_local384.jsonl \
+  results/preds/pred_fresh_v2_hf_local10.jsonl \
+  --output_root results/metrics/metric_suite \
+  --compare
+```
+
+### Chạy toàn bộ nhóm đã có input
+
+```bash
+python -u scripts/eval/run_metric_pipeline.py \
+  --all \
+  --specific_predictions \
+  results/preds/pred_ctx24k_v2_hf_local384.jsonl \
+  results/preds/pred_fresh_v2_hf_local10.jsonl \
+  --judge_provider gemini \
+  --judge_model gemini-2.5-flash-lite \
+  --output_root results/metrics/pipeline
+```
+
+---
+
 ## 1) Phân vai giữa các lớp file
 
 ### Input để chấm

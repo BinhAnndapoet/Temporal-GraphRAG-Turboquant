@@ -156,16 +156,28 @@ def main() -> None:
     args = parser.parse_args()
 
     specific_predictions = [Path(p) for p in args.specific_predictions or []]
-    if args.specific_labels is not None and len(args.specific_labels) != len(specific_predictions):
+    if args.specific_labels is not None and len(args.specific_labels) != len(
+        specific_predictions
+    ):
         raise SystemExit("--specific_labels must match --specific_predictions length")
 
     run_specific = args.run_specific or bool(specific_predictions)
-    run_abstract = args.run_abstract or bool(args.abstract_predictions_a and args.abstract_predictions_b)
+    run_abstract = args.run_abstract or bool(
+        args.abstract_predictions_a and args.abstract_predictions_b
+    )
 
-    if (args.run_specific or (args.all and specific_predictions)) and not specific_predictions:
-        raise SystemExit("Specific QA was requested but --specific_predictions is empty")
-    if args.run_abstract and not (args.abstract_predictions_a and args.abstract_predictions_b):
-        raise SystemExit("Abstract QA was requested but both abstract prediction files were not provided")
+    if (
+        args.run_specific or (args.all and specific_predictions)
+    ) and not specific_predictions:
+        raise SystemExit(
+            "Specific QA was requested but --specific_predictions is empty"
+        )
+    if args.run_abstract and not (
+        args.abstract_predictions_a and args.abstract_predictions_b
+    ):
+        raise SystemExit(
+            "Abstract QA was requested but both abstract prediction files were not provided"
+        )
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     run_name = slugify("all" if args.all else "pipeline")
@@ -215,8 +227,17 @@ def main() -> None:
 
         judge_outputs: dict[str, str] = {}
         for idx, prediction in enumerate(specific_predictions, start=1):
-            label = args.specific_labels[idx - 1] if args.specific_labels else prediction.stem
-            judge_output = run_dir / "specific" / "judged" / f"{slugify(label)}_{args.judge_provider}.jsonl"
+            label = (
+                args.specific_labels[idx - 1]
+                if args.specific_labels
+                else prediction.stem
+            )
+            judge_output = (
+                run_dir
+                / "specific"
+                / "judged"
+                / f"{slugify(label)}_{args.judge_provider}.jsonl"
+            )
             judge_cmd = [
                 sys.executable,
                 "scripts/eval/judge_specific.py",
@@ -259,7 +280,9 @@ def main() -> None:
         run_command(abstract_cmd, logger)
         created_artifacts["abstract_judged"] = str(abstract_output)
     elif args.all and not (args.abstract_predictions_a and args.abstract_predictions_b):
-        logger.info("[skip] abstract group skipped because no abstract prediction pair was supplied")
+        logger.info(
+            "[skip] abstract group skipped because no abstract prediction pair was supplied"
+        )
 
     manifest["created_artifacts"] = created_artifacts
     manifest_path = run_dir / "manifest.json"

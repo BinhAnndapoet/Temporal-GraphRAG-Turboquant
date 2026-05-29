@@ -15,6 +15,11 @@ Tác giả TG-RAG đánh giá hệ thống trên 4 trục chính:
 
 TurboQuant là **phần bổ sung triển khai**, nên khi đánh giá phải dùng **cùng 4 trục đó** để đo chất lượng, rồi cộng thêm các metric về **hiệu năng local inference**.
 
+Để dễ theo dõi trong báo cáo, mình trình bày toàn bộ thành **6 nhóm**:
+
+- 4 nhóm theo paper: Specific QA, Abstract QA, Incremental Evaluation, Ablation / Component Contribution
+- 2 nhóm bổ sung cho TurboQuant: Efficiency / Runtime, Reliability / Stability
+
 Nói ngắn gọn:
 
 - **Metric gốc của tác giả** → đo chất lượng hệ thống TG-RAG.

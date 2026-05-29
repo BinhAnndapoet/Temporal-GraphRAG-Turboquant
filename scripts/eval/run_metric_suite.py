@@ -32,7 +32,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-
 TOKEN_RE = re.compile(r"[A-Za-z0-9.$%+-]+")
 
 
@@ -130,7 +129,9 @@ def scored_rows(
     scored: list[dict[str, Any]] = []
     for row in rows:
         answer = str(row.get("answer", ""))
-        if not include_unanswerable and (not answer or answer.lower() == "unanswerable"):
+        if not include_unanswerable and (
+            not answer or answer.lower() == "unanswerable"
+        ):
             continue
 
         prediction = str(row.get("prediction", ""))
@@ -212,7 +213,8 @@ def compare_prediction_files(
                 "rouge_l_b": row_b.get("rouge_l", 0.0),
                 "delta_f1": delta_f1,
                 "delta_rouge_l": delta_rouge,
-                "same_prediction": row_a.get("prediction", "") == row_b.get("prediction", ""),
+                "same_prediction": row_a.get("prediction", "")
+                == row_b.get("prediction", ""),
             }
         )
 

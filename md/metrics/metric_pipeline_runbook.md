@@ -299,6 +299,43 @@ python -u scripts/eval/judge_pairwise_abstract.py \
 - **Muốn tổng kết đầy đủ**: dùng `--resume` cho specific và chạy nhiều đợt cho tới hết.
 - **Muốn chỉ kiểm tra chất lượng**: không cần chấm toàn bộ, lấy mẫu 20–50 câu cũng đủ nhìn xu hướng ban đầu.
 
+### 12.4 Ba mức chạy nhanh để copy-paste
+
+Nếu bạn muốn chọn ngay một mức chạy, dùng các mốc này:
+
+- **Mini check**: `--limit 20`
+- **Batch vừa**: `--limit 50`
+- **Batch lớn**: `--limit 100`
+
+Gợi ý thao tác:
+
+1. Chạy `--limit 20` trước để test prompt, auth, và output schema.
+2. Nếu ổn thì tăng lên `--limit 50` để lấy mẫu đáng kể hơn.
+3. Nếu quota còn tốt thì lên `--limit 100` và dùng `--resume` khi cần nối tiếp.
+
+Ví dụ thực tế cho specific QA:
+
+```bash
+python -u scripts/eval/judge_specific.py \
+  --predictions results/preds/pred_ctx24k_v2_hf_local384.jsonl \
+  --output results/judged/pred_ctx24k_v2_hf_local384_gemini.jsonl \
+  --judge_provider gemini \
+  --judge_model gemini-2.5-flash-lite \
+  --limit 50
+```
+
+Khi cần nối tiếp batch kế tiếp:
+
+```bash
+python -u scripts/eval/judge_specific.py \
+  --predictions results/preds/pred_ctx24k_v2_hf_local384.jsonl \
+  --output results/judged/pred_ctx24k_v2_hf_local384_gemini.jsonl \
+  --judge_provider gemini \
+  --judge_model gemini-2.5-flash-lite \
+  --limit 50 \
+  --resume
+```
+
 ---
 
 ## 7) Output sẽ nằm ở đâu

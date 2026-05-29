@@ -242,6 +242,65 @@ Khi đó một lệnh sẽ chạy hết các nhóm đã khai báo.
 
 ---
 
+## 12) Chạy Gemini judge theo batch để tránh quota
+
+Nếu bạn lo bị `RESOURCE_EXHAUSTED` hoặc rate limit, cách an toàn nhất là chạy Gemini judge theo đợt nhỏ bằng `--limit`, rồi dùng `--resume` để nối tiếp.
+
+### 12.1 Specific QA: chạy từng batch
+
+Ví dụ batch 20 câu đầu tiên:
+
+```bash
+python -u scripts/eval/judge_specific.py \
+  --predictions results/preds/pred_ctx24k_v2_hf_local384.jsonl \
+  --output results/judged/pred_ctx24k_v2_hf_local384_gemini.jsonl \
+  --judge_provider gemini \
+  --judge_model gemini-2.5-flash-lite \
+  --limit 20
+```
+
+Chạy tiếp batch sau trên **cùng output file**:
+
+```bash
+python -u scripts/eval/judge_specific.py \
+  --predictions results/preds/pred_ctx24k_v2_hf_local384.jsonl \
+  --output results/judged/pred_ctx24k_v2_hf_local384_gemini.jsonl \
+  --judge_provider gemini \
+  --judge_model gemini-2.5-flash-lite \
+  --limit 20 \
+  --resume
+```
+
+Muốn chạy theo nhiều đợt hơn, tăng `--limit` lên 50/100 tùy quota. Ý tưởng là:
+
+- chạy một batch nhỏ
+- chờ quota hồi lại nếu cần
+- chạy lại với `--resume`
+
+### 12.2 Abstract QA: chạy từng batch
+
+`judge_pairwise_abstract.py` cũng có `--limit`, nên có thể chia nhỏ nếu abstract set lớn:
+
+```bash
+python -u scripts/eval/judge_pairwise_abstract.py \
+  --predictions_a results/preds/<abstract_a>.jsonl \
+  --predictions_b results/preds/<abstract_b>.jsonl \
+  --name_a turboquant \
+  --name_b baseline \
+  --output results/judged/pairwise_abstract_gemini.jsonl \
+  --judge_provider gemini \
+  --judge_model gemini-2.5-flash-lite \
+  --limit 20
+```
+
+### 12.3 Nên dùng cách nào?
+
+- **Muốn nhanh và ít risk quota**: chạy batch nhỏ 20/50 câu.
+- **Muốn tổng kết đầy đủ**: dùng `--resume` cho specific và chạy nhiều đợt cho tới hết.
+- **Muốn chỉ kiểm tra chất lượng**: không cần chấm toàn bộ, lấy mẫu 20–50 câu cũng đủ nhìn xu hướng ban đầu.
+
+---
+
 ## 7) Output sẽ nằm ở đâu
 
 Sau khi chạy, runner sẽ tự tạo một thư mục run dạng:

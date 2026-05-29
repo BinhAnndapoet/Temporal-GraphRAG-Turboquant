@@ -117,6 +117,31 @@ def _is_local_base_url(base_url: str) -> bool:
     return bool(base_url) and ("localhost" in base_url or "127.0.0.1" in base_url)
 
 
+def _resolve_embedding_overrides(args):
+    embedding_provider = args.embedding_provider
+    embedding_model = args.embedding_model
+    embedding_dim = args.embedding_dim
+    embedding_device = args.embedding_device
+    embedding_batch_size = args.embedding_batch_size
+    embedding_max_tokens = args.embedding_max_tokens
+    embedding_prefix = args.embedding_prefix
+    embedding_base_url = args.embedding_base_url
+
+    if embedding_provider == "huggingface":
+        embedding_base_url = None
+
+    return {
+        "embedding_provider": embedding_provider,
+        "embedding_model": embedding_model,
+        "embedding_dim": embedding_dim,
+        "embedding_device": embedding_device,
+        "embedding_batch_size": embedding_batch_size,
+        "embedding_max_tokens": embedding_max_tokens,
+        "embedding_prefix": embedding_prefix,
+        "embedding_base_url": embedding_base_url,
+    }
+
+
 def apply_runtime_overrides(args, override_config: Dict) -> Dict:
     if args.local_llm_backend == "turboquant":
         provider = "openai"
@@ -154,12 +179,31 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         elif provider == "ollama":
             wire_protocol = "ollama-native"
 
+    embedding_runtime = _resolve_embedding_overrides(args)
+    embedding_provider = embedding_runtime["embedding_provider"] or embedding_provider
+    if embedding_provider == "huggingface":
+        embedding_base_url = None
+    elif embedding_runtime["embedding_base_url"] is not None:
+        embedding_base_url = embedding_runtime["embedding_base_url"]
+
     if provider:
         override_config["provider"] = provider
     if model:
         override_config["model"] = model
     if embedding_provider:
         override_config["embedding_provider"] = embedding_provider
+    if embedding_runtime["embedding_model"]:
+        override_config["embedding_model"] = embedding_runtime["embedding_model"]
+    if embedding_runtime["embedding_dim"]:
+        override_config["embedding_dim"] = embedding_runtime["embedding_dim"]
+    if embedding_runtime["embedding_device"]:
+        override_config["embedding_device"] = embedding_runtime["embedding_device"]
+    if embedding_runtime["embedding_batch_size"]:
+        override_config["embedding_batch_size"] = embedding_runtime["embedding_batch_size"]
+    if embedding_runtime["embedding_max_tokens"]:
+        override_config["embedding_max_tokens"] = embedding_runtime["embedding_max_tokens"]
+    if embedding_runtime["embedding_prefix"] is not None:
+        override_config["embedding_prefix"] = embedding_runtime["embedding_prefix"]
     if llm_max_async:
         override_config["best_model_max_async"] = llm_max_async
         override_config["cheap_model_max_async"] = llm_max_async
@@ -175,6 +219,12 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         "model": model or "config",
         "llm_base_url": llm_base_url,
         "embedding_provider": embedding_provider or "config",
+        "embedding_model": embedding_runtime["embedding_model"],
+        "embedding_dim": embedding_runtime["embedding_dim"],
+        "embedding_device": embedding_runtime["embedding_device"],
+        "embedding_batch_size": embedding_runtime["embedding_batch_size"],
+        "embedding_max_tokens": embedding_runtime["embedding_max_tokens"],
+        "embedding_prefix": embedding_runtime["embedding_prefix"],
         "embedding_base_url": embedding_base_url,
         "llm_max_async": llm_max_async,
         "llm_timeout": llm_timeout,
@@ -197,6 +247,13 @@ def print_runtime(runtime_config: Dict) -> None:
         f"[runtime] embedding_provider={runtime_config['embedding_provider']} "
         f"embedding_base_url={runtime_config['embedding_base_url']}"
     )
+    extra = []
+    for key in ("embedding_model", "embedding_dim", "embedding_device", "embedding_batch_size", "embedding_max_tokens", "embedding_prefix"):
+        value = runtime_config.get(key)
+        if value is not None:
+            extra.append(f"{key}={value}")
+    if extra:
+        print("[runtime] " + " ".join(extra))
 
 
 def main():
@@ -262,9 +319,45 @@ def main():
     )
     parser.add_argument(
         '--embedding_provider',
-        choices=['ollama', 'openai', 'azure', 'bedrock'],
+        choices=['ollama', 'openai', 'azure', 'bedrock', 'huggingface'],
         default=None,
         help='Override embedding provider from config'
+    )
+    parser.add_argument(
+        '--embedding_model',
+        type=str,
+        default=None,
+        help='Override embedding model name (used by Ollama or HuggingFace embeddings)'
+    )
+    parser.add_argument(
+        '--embedding_dim',
+        type=int,
+        default=None,
+        help='Override embedding vector dimension'
+    )
+    parser.add_argument(
+        '--embedding_device',
+        type=str,
+        default=None,
+        help='Embedding device for HuggingFace embeddings, e.g. cpu or cuda'
+    )
+    parser.add_argument(
+        '--embedding_batch_size',
+        type=int,
+        default=None,
+        help='Embedding batch size for HuggingFace embeddings'
+    )
+    parser.add_argument(
+        '--embedding_max_tokens',
+        type=int,
+        default=None,
+        help='Embedding max tokens for HuggingFace embeddings'
+    )
+    parser.add_argument(
+        '--embedding_prefix',
+        type=str,
+        default=None,
+        help='Embedding text prefix, e.g. search_document: '
     )
     parser.add_argument(
         '--embedding_base_url',

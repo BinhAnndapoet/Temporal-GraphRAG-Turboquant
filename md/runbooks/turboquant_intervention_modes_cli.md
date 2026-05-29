@@ -108,15 +108,16 @@ python -u scripts/eval/run_batch_queries.py \
   --local_llm_backend turboquant \
   --llm_model qwen25-7b-q8-ctkq8-ctvturbo3-c64k-p2-np3072 \
   --llm_base_url http://localhost:8080/v1 \
-  --embedding_provider ollama \
-  --embedding_model nomic-embed-text \
-  --embedding_dim 768 \
-  --embedding_base_url http://localhost:11434 \
+  --embedding_provider huggingface \
+  --embedding_model nomic-ai/nomic-embed-text-v1.5 \
+  --embedding_device cuda \
+  --embedding_batch_size 16 \
+  --embedding_max_tokens 7500 \
   --llm_max_async 1 \
   --llm_timeout 600
 ```
 
-> Ghi chú: `run_batch_queries.py` hiện hỗ trợ `--local_llm_backend` với giá trị `normal|turboquant`.
+> Ghi chú: `run_batch_queries.py` hiện hỗ trợ `--local_llm_backend` với giá trị `normal|turboquant`, và thêm `--embedding_provider huggingface` để query cùng embedding backend với build.
 
 ---
 

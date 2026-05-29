@@ -14,7 +14,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv(PROJECT_ROOT / ".env")
@@ -52,6 +51,29 @@ def load_done_questions(path: Path) -> set[str]:
     return done
 
 
+def resolve_embedding_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    embedding_provider = args.embedding_provider
+    embedding_model = args.embedding_model
+    embedding_dim = args.embedding_dim
+    embedding_device = args.embedding_device
+    embedding_batch_size = args.embedding_batch_size
+    embedding_max_tokens = args.embedding_max_tokens
+    embedding_prefix = args.embedding_prefix
+    embedding_base_url = args.embedding_base_url
+
+    if embedding_provider == "huggingface":
+        embedding_base_url = None
+
+    return {
+        "embedding_provider": embedding_provider,
+        "embedding_model": embedding_model,
+        "embedding_dim": embedding_dim,
+        "embedding_device": embedding_device,
+        "embedding_batch_size": embedding_batch_size,
+        "embedding_max_tokens": embedding_max_tokens,
+        "embedding_prefix": embedding_prefix,
+        "embedding_base_url": embedding_base_url,
+    }
 
 
 def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, Any]:
@@ -80,15 +102,17 @@ def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, 
         if args.llm_timeout:
             override_config["llm_timeout"] = args.llm_timeout
 
-        if not any([
-            provider,
-            model,
-            llm_base_url,
-            embedding_provider,
-            embedding_base_url,
-            embedding_model,
-            embedding_dim,
-        ]):
+        if not any(
+            [
+                provider,
+                model,
+                llm_base_url,
+                embedding_provider,
+                embedding_base_url,
+                embedding_model,
+                embedding_dim,
+            ]
+        ):
             return {}
 
         wire_protocol = provider or "config"
@@ -96,12 +120,18 @@ def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, 
             wire_protocol = "ollama-native"
         elif provider == "openai" and llm_base_url:
             is_local = "localhost" in llm_base_url or "127.0.0.1" in llm_base_url
-            wire_protocol = "openai-compatible-local" if is_local else "openai-compatible"
+            wire_protocol = (
+                "openai-compatible-local" if is_local else "openai-compatible"
+            )
 
         api_key = None
         if provider == "openai" and llm_base_url:
             is_local = "localhost" in llm_base_url or "127.0.0.1" in llm_base_url
-            api_key = (os.getenv("OPENAI_API_KEY") or "sk-local") if is_local else os.getenv("OPENAI_API_KEY")
+            api_key = (
+                (os.getenv("OPENAI_API_KEY") or "sk-local")
+                if is_local
+                else os.getenv("OPENAI_API_KEY")
+            )
 
         return {
             "local_llm_backend": "provider_override",
@@ -129,17 +159,34 @@ def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, 
         wire_protocol = "openai-compatible-local"
         api_key = os.getenv("OPENAI_API_KEY") or "sk-local"
 
-    embedding_provider = args.embedding_provider or "ollama"
-    embedding_model = args.embedding_model or "nomic-embed-text"
-    embedding_dim = args.embedding_dim or 768
-    embedding_base_url = args.embedding_base_url or "http://localhost:11434"
-    override_config.update({
-        "provider": provider,
-        "model": model,
-        "embedding_provider": embedding_provider,
-        "embedding_model": embedding_model,
-        "embedding_dim": embedding_dim,
-    })
+    embedding_runtime = resolve_embedding_overrides(args)
+    embedding_provider = embedding_runtime["embedding_provider"] or "ollama"
+    embedding_model = embedding_runtime["embedding_model"] or "nomic-embed-text"
+    embedding_dim = embedding_runtime["embedding_dim"] or 768
+    embedding_device = embedding_runtime["embedding_device"] or "cpu"
+    embedding_batch_size = embedding_runtime["embedding_batch_size"] or 16
+    embedding_max_tokens = embedding_runtime["embedding_max_tokens"] or 7500
+    embedding_prefix = embedding_runtime["embedding_prefix"]
+    if embedding_provider == "huggingface":
+        embedding_base_url = None
+    else:
+        embedding_base_url = (
+            embedding_runtime["embedding_base_url"] or "http://localhost:11434"
+        )
+    override_config.update(
+        {
+            "provider": provider,
+            "model": model,
+            "embedding_provider": embedding_provider,
+            "embedding_model": embedding_model,
+            "embedding_dim": embedding_dim,
+            "embedding_device": embedding_device,
+            "embedding_batch_size": embedding_batch_size,
+            "embedding_max_tokens": embedding_max_tokens,
+        }
+    )
+    if embedding_prefix is not None:
+        override_config["embedding_prefix"] = embedding_prefix
     if args.local_llm_backend == "turboquant":
         # Local llama-server has finite KV cache; keep build/query LLM calls serial by default.
         llm_max_async = args.llm_max_async or 1
@@ -159,6 +206,10 @@ def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, 
         "embedding_provider": embedding_provider,
         "embedding_model": embedding_model,
         "embedding_dim": embedding_dim,
+        "embedding_device": embedding_device,
+        "embedding_batch_size": embedding_batch_size,
+        "embedding_max_tokens": embedding_max_tokens,
+        "embedding_prefix": embedding_prefix,
         "embedding_base_url": embedding_base_url,
         "wire_protocol": wire_protocol,
         "api_key": api_key,
@@ -202,7 +253,9 @@ def check_turboquant(base_url: str, strict: bool = False) -> bool:
                 response.read()
                 log(f"[runtime] turboquant_healthcheck=ok props_url={props_url}")
                 return True
-            log(f"[runtime] turboquant_healthcheck=warn status={response.status} props_url={props_url}")
+            log(
+                f"[runtime] turboquant_healthcheck=warn status={response.status} props_url={props_url}"
+            )
     except Exception as exc:
         log(f"[runtime] turboquant_healthcheck=failed props_url={props_url}")
         if strict:
@@ -215,11 +268,21 @@ def build_query_param(raw_config: dict[str, Any], mode: str) -> QueryParam:
         mode=mode,
         top_k=raw_config.get("top_k", 20),
         seed_node_method=raw_config.get("seed_node_method", "entities"),
-        local_max_token_for_text_unit=raw_config.get("local_max_token_for_text_unit", 4000),
-        local_max_token_for_local_context=raw_config.get("local_max_token_for_local_context", 6000),
-        local_max_token_for_community_report=raw_config.get("local_max_token_for_community_report", 2000),
-        global_max_token_for_community_report=raw_config.get("global_max_token_for_community_report", 16384),
-        naive_max_token_for_text_unit=raw_config.get("naive_max_token_for_text_unit", 12000),
+        local_max_token_for_text_unit=raw_config.get(
+            "local_max_token_for_text_unit", 4000
+        ),
+        local_max_token_for_local_context=raw_config.get(
+            "local_max_token_for_local_context", 6000
+        ),
+        local_max_token_for_community_report=raw_config.get(
+            "local_max_token_for_community_report", 2000
+        ),
+        global_max_token_for_community_report=raw_config.get(
+            "global_max_token_for_community_report", 16384
+        ),
+        naive_max_token_for_text_unit=raw_config.get(
+            "naive_max_token_for_text_unit", 12000
+        ),
         sub_graph=raw_config.get("enable_subgraph", False),
         mix_relation=raw_config.get("enable_mixed_relationship", False),
     )
@@ -237,8 +300,14 @@ def main() -> None:
     parser.add_argument("--mode", choices=["local", "global", "naive"], required=True)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--start", type=int, default=0)
-    parser.add_argument("--resume", action="store_true", help="Skip questions already present in output")
-    parser.add_argument("--no_retrieval_detail", action="store_true", help="Do not save local retrieval detail")
+    parser.add_argument(
+        "--resume", action="store_true", help="Skip questions already present in output"
+    )
+    parser.add_argument(
+        "--no_retrieval_detail",
+        action="store_true",
+        help="Do not save local retrieval detail",
+    )
     parser.add_argument(
         "--provider",
         choices=["openai", "azure", "bedrock", "gemini", "ollama"],
@@ -257,9 +326,42 @@ def main() -> None:
     )
     parser.add_argument(
         "--embedding_provider",
-        choices=["openai", "azure", "bedrock", "ollama"],
+        choices=["openai", "azure", "bedrock", "ollama", "huggingface"],
         default=None,
         help="Override embedding provider from config",
+    )
+    parser.add_argument(
+        "--embedding_model",
+        default=None,
+        help="Embedding model name for Ollama or HuggingFace embeddings.",
+    )
+    parser.add_argument(
+        "--embedding_dim",
+        type=int,
+        default=None,
+        help="Embedding vector dimension.",
+    )
+    parser.add_argument(
+        "--embedding_device",
+        default=None,
+        help="Embedding device for HuggingFace embeddings, e.g. cpu or cuda.",
+    )
+    parser.add_argument(
+        "--embedding_batch_size",
+        type=int,
+        default=None,
+        help="Embedding batch size for HuggingFace embeddings.",
+    )
+    parser.add_argument(
+        "--embedding_max_tokens",
+        type=int,
+        default=None,
+        help="Embedding max sequence length for HuggingFace embeddings.",
+    )
+    parser.add_argument(
+        "--embedding_prefix",
+        default=None,
+        help="Embedding prefix for HuggingFace embeddings, e.g. search_document: ",
     )
     parser.add_argument(
         "--local_llm_backend",
@@ -281,17 +383,6 @@ def main() -> None:
         "--embedding_base_url",
         default=None,
         help="Ollama embedding base URL (default: http://localhost:11434)",
-    )
-    parser.add_argument(
-        "--embedding_model",
-        default=None,
-        help="Embedding model name for Ollama embeddings. Default: nomic-embed-text",
-    )
-    parser.add_argument(
-        "--embedding_dim",
-        type=int,
-        default=None,
-        help="Embedding vector dimension. Default: 768 for nomic-embed-text; use 1024 for bge-m3.",
     )
     parser.add_argument(
         "--llm_max_async",
@@ -316,11 +407,36 @@ def main() -> None:
         help="Skip llama-server /props check even when using --local_llm_backend turboquant",
     )
     parser.add_argument("--top_k", type=int, default=None, help="Override query top_k")
-    parser.add_argument("--local_max_token_for_text_unit", type=int, default=None, help="Override local text-unit context token budget")
-    parser.add_argument("--local_max_token_for_local_context", type=int, default=None, help="Override local entities/relations context token budget")
-    parser.add_argument("--local_max_token_for_community_report", type=int, default=None, help="Override local community report token budget")
-    parser.add_argument("--global_max_token_for_community_report", type=int, default=None, help="Override global community report token budget")
-    parser.add_argument("--naive_max_token_for_text_unit", type=int, default=None, help="Override naive text-unit token budget")
+    parser.add_argument(
+        "--local_max_token_for_text_unit",
+        type=int,
+        default=None,
+        help="Override local text-unit context token budget",
+    )
+    parser.add_argument(
+        "--local_max_token_for_local_context",
+        type=int,
+        default=None,
+        help="Override local entities/relations context token budget",
+    )
+    parser.add_argument(
+        "--local_max_token_for_community_report",
+        type=int,
+        default=None,
+        help="Override local community report token budget",
+    )
+    parser.add_argument(
+        "--global_max_token_for_community_report",
+        type=int,
+        default=None,
+        help="Override global community report token budget",
+    )
+    parser.add_argument(
+        "--naive_max_token_for_text_unit",
+        type=int,
+        default=None,
+        help="Override naive text-unit token budget",
+    )
     args = parser.parse_args()
 
     batch_total_start = time.perf_counter()
@@ -330,17 +446,23 @@ def main() -> None:
 
     load_start = time.perf_counter()
     questions = load_jsonl(questions_path)
-    log(f"[batch-detail] load questions: {format_seconds(time.perf_counter() - load_start)} rows={len(questions)}")
+    log(
+        f"[batch-detail] load questions: {format_seconds(time.perf_counter() - load_start)} rows={len(questions)}"
+    )
     slice_start = time.perf_counter()
     if args.start:
         questions = questions[args.start :]
     if args.limit is not None:
         questions = questions[: args.limit]
-    log(f"[batch-detail] apply start/limit: {format_seconds(time.perf_counter() - slice_start)} selected={len(questions)}")
+    log(
+        f"[batch-detail] apply start/limit: {format_seconds(time.perf_counter() - slice_start)} selected={len(questions)}"
+    )
 
     resume_start = time.perf_counter()
     done_questions = load_done_questions(output_path) if args.resume else set()
-    log(f"[batch-detail] load resume state: {format_seconds(time.perf_counter() - resume_start)} done={len(done_questions)}")
+    log(
+        f"[batch-detail] load resume state: {format_seconds(time.perf_counter() - resume_start)} done={len(done_questions)}"
+    )
     open_mode = "a" if args.resume else "w"
 
     override_config = {"working_dir": args.working_dir}
@@ -377,20 +499,28 @@ def main() -> None:
             sys.exit(1)
 
     setup_start = time.perf_counter()
-    log("[setup] loading graph/vector stores... this can take a few minutes for large output_ollama")
+    log(
+        "[setup] loading graph/vector stores... this can take a few minutes for large output_ollama"
+    )
     graph_rag = create_temporal_graphrag_from_config(
         config_path=args.config,
         config_type="querying",
         override_config=override_config,
         api_key=runtime_config.get("api_key") if runtime_config else None,
         base_url=runtime_config.get("llm_base_url") if runtime_config else None,
-        embedding_base_url=runtime_config.get("embedding_base_url") if runtime_config else None,
+        embedding_base_url=(
+            runtime_config.get("embedding_base_url") if runtime_config else None
+        ),
     )
-    log(f"[timer] load graph/vector stores: {format_seconds(time.perf_counter() - setup_start)}")
+    log(
+        f"[timer] load graph/vector stores: {format_seconds(time.perf_counter() - setup_start)}"
+    )
     config_loader = ConfigLoader(config_path=args.config)
     raw_config = config_loader.get_config("querying", override_args=override_config)
     query_param = build_query_param(raw_config, args.mode)
-    log(f"[timer] initialize graph/query params: {format_seconds(time.perf_counter() - setup_start)}")
+    log(
+        f"[timer] initialize graph/query params: {format_seconds(time.perf_counter() - setup_start)}"
+    )
 
     total_start = time.perf_counter()
     processed = 0
@@ -483,7 +613,9 @@ def main() -> None:
     log(f"  skipped: {skipped}")
     log(f"  failed: {failed}")
     log(f"  total_seconds: {total_elapsed:.3f}")
-    log(f"  wall_seconds_including_setup: {time.perf_counter() - batch_total_start:.3f}")
+    log(
+        f"  wall_seconds_including_setup: {time.perf_counter() - batch_total_start:.3f}"
+    )
     log(f"  output: {output_path}")
 
 

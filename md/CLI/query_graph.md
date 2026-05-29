@@ -156,6 +156,37 @@ python query_graph.py \
 - `--llm_timeout`: tăng lên 900 để giảm timeout khi prompt dài.
 - `--show_retrieval`: in thêm evidence retrieval detail để debug.
 
+### 4.2 Local query với HuggingFace embedding
+
+Nếu build dùng HuggingFace embedding model, hãy query cùng backend đó để giữ điều kiện so sánh công bằng:
+
+```bash
+python query_graph.py \
+  --question "What was DXC Technology's revenue performance in Q1 2022?" \
+  --working_dir outputs/build_graph/BUILD_qwen25_7b_p4_c131072_hf_nomic_cuda_384docs_fresh-v2 \
+  --mode local \
+  --local_llm_backend turboquant \
+  --model qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072 \
+  --base_url http://localhost:8080/v1 \
+  --llm_max_async 4 \
+  --llm_timeout 900 \
+  --embedding_provider huggingface \
+  --embedding_model nomic-ai/nomic-embed-text-v1.5 \
+  --embedding_device cuda \
+  --embedding_batch_size 16 \
+  --embedding_max_tokens 7500 \
+  --show_retrieval
+```
+
+### Ý nghĩa bổ sung
+
+- `--embedding_provider huggingface`: dùng sentence-transformers local thay vì Ollama embeddings.
+- `--embedding_model`: phải khớp model dùng lúc build.
+- `--embedding_device`: thường là `cuda` nếu máy có GPU phù hợp, hoặc `cpu` nếu không.
+- `--embedding_batch_size`: batch size khi encode embeddings.
+- `--embedding_max_tokens`: giới hạn độ dài đầu vào cho embedding model.
+- Không cần `--embedding_base_url` khi dùng HuggingFace embedding.
+
 ---
 
 ## 5. Lệnh Query Global
@@ -384,6 +415,7 @@ python query_graph.py \
 - Nếu muốn query Neo4j, đó là một workflow khác, không phải `query_graph.py`.
 - `local` là mode bạn sẽ dùng nhiều nhất cho câu hỏi fact có mốc thời gian.
 - `global` phù hợp khi cần summary hoặc xu hướng.
+- Nếu build dùng HuggingFace embedding thì query cũng nên chạy `--embedding_provider huggingface` và cùng `--embedding_model`.
 
 ---
 
@@ -401,6 +433,11 @@ python query_graph.py \
   --local_llm_backend turboquant \
   --model qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072 \
   --base_url http://localhost:8080/v1 \
+  --embedding_provider huggingface \
+  --embedding_model nomic-ai/nomic-embed-text-v1.5 \
+  --embedding_device cuda \
+  --embedding_batch_size 16 \
+  --embedding_max_tokens 7500 \
   --show_retrieval
 ```
 

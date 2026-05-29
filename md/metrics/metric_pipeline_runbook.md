@@ -20,7 +20,7 @@ Nếu terminal đã hiện `(turboquant)` thì chỉ cần `cd` vào repo là đ
 
 ---
 
-## Quick copy-paste
+## Quick start
 
 ### Mini check
 
@@ -250,7 +250,7 @@ Giả sử bạn muốn so sánh hai kết quả query gần nhất:
 - `results/preds/pred_ctx24k_v2_hf_local384.jsonl`
 - `results/preds/pred_fresh_v2_hf_local10.jsonl`
 
-Phần lệnh copy-paste đã được đặt ở đầu file trong mục **Quick copy-paste**.
+Phần lệnh copy-paste đã được đặt ở đầu file trong mục **Quick start**.
 
 Ở đây chỉ cần nhớ:
 
@@ -260,7 +260,7 @@ Phần lệnh copy-paste đã được đặt ở đầu file trong mục **Quic
 
 ### Chạy toàn bộ nhóm trong một lệnh
 
-Khi bạn đã có đủ input cho các nhóm, hãy xem mục **Quick copy-paste** ở đầu file để lấy lệnh one-shot.
+Khi bạn đã có đủ input cho các nhóm, hãy xem mục **Quick start** ở đầu file để lấy lệnh one-shot.
 
 Nếu sau này bạn có thêm 2 file abstract prediction, pipeline sẽ tự mở rộng phần abstract khi truyền đủ input tương ứng.
 
@@ -409,11 +409,11 @@ File compare có:
 
 - `num_overlap_questions`
 - `same_prediction_count`
-Xem lệnh tương ứng trong phần **Quick copy-paste**.
+Xem lệnh tương ứng trong phần **Quick start**.
 
 - question
 - answer
-Chạy theo mức batch ở phần **Quick copy-paste** hoặc phần batch quota ở mục 7 nếu cần nối tiếp.
+Chạy theo mức batch ở phần **Quick start** hoặc phần batch quota ở mục 7 nếu cần nối tiếp.
 ```bash
 python -u scripts/eval/run_metric_suite.py \
   --predictions \
@@ -496,4 +496,4 @@ thì cần:
 
 Các output lỗi vẫn được giữ trong `results/judged/**` và log trong `logs/metrics/pipeline/**`, nên bạn có thể dùng chúng để debug, nhưng để có kết quả judge thật thì cần key hợp lệ.
 
-Nếu bạn muốn tránh quota hơn nữa, hãy quay lại phần **Quick copy-paste** và chạy với `--limit` nhỏ hơn rồi `--resume` sau.
+Nếu bạn muốn tránh quota hơn nữa, hãy quay lại phần **Quick start** và chạy với `--limit` nhỏ hơn rồi `--resume` sau.

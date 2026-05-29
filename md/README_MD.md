@@ -9,13 +9,16 @@ File này giúp bạn biết nên đọc gì trước, theo đúng mục tiêu l
 1. `md/metrics/tgrag_metrics_turboquant_evaluation.md`  
    → Tổng quan framework metric TG-RAG + TurboQuant.
 
-2. `md/runbooks/turboquant_intervention_modes_cli.md`  
+2. `md/metrics/metric_pipeline_runbook.md`  
+   → Cách chạy metric sau query, nơi lưu summary/log, và cách compare 2 prediction files.
+
+3. `md/runbooks/turboquant_intervention_modes_cli.md`  
    → TurboQuant can thiệp từng phần hay toàn bộ, kèm CLI mode rõ ràng.
 
-3. `md/metrics/tgrag_metrics_execution_runbook.md`  
+4. `md/metrics/tgrag_metrics_execution_runbook.md`  
    → Cách chạy để sinh kết quả metric thực tế (bao gồm p95/p99, CI, disagreement).
 
-4. `md/runbooks/experiment_matrix_turboquant_vs_baseline.md`  
+5. `md/runbooks/experiment_matrix_turboquant_vs_baseline.md`  
    → Ma trận thí nghiệm đề xuất để so sánh baseline vs turboquant công bằng.
 
 ---

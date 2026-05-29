@@ -52,6 +52,31 @@ def load_done_questions(path: Path) -> set[str]:
     return done
 
 
+def resolve_embedding_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    embedding_provider = args.embedding_provider
+    embedding_model = args.embedding_model
+    embedding_dim = args.embedding_dim
+    embedding_device = args.embedding_device
+    embedding_batch_size = args.embedding_batch_size
+    embedding_max_tokens = args.embedding_max_tokens
+    embedding_prefix = args.embedding_prefix
+    embedding_base_url = args.embedding_base_url
+
+    if embedding_provider == "huggingface":
+        embedding_base_url = None
+
+    return {
+        "embedding_provider": embedding_provider,
+        "embedding_model": embedding_model,
+        "embedding_dim": embedding_dim,
+        "embedding_device": embedding_device,
+        "embedding_batch_size": embedding_batch_size,
+        "embedding_max_tokens": embedding_max_tokens,
+        "embedding_prefix": embedding_prefix,
+        "embedding_base_url": embedding_base_url,
+    }
+
+
 
 
 def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, Any]:
@@ -129,17 +154,30 @@ def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, 
         wire_protocol = "openai-compatible-local"
         api_key = os.getenv("OPENAI_API_KEY") or "sk-local"
 
-    embedding_provider = args.embedding_provider or "ollama"
-    embedding_model = args.embedding_model or "nomic-embed-text"
-    embedding_dim = args.embedding_dim or 768
-    embedding_base_url = args.embedding_base_url or "http://localhost:11434"
+    embedding_runtime = resolve_embedding_overrides(args)
+    embedding_provider = embedding_runtime["embedding_provider"] or "ollama"
+    embedding_model = embedding_runtime["embedding_model"] or "nomic-embed-text"
+    embedding_dim = embedding_runtime["embedding_dim"] or 768
+    embedding_device = embedding_runtime["embedding_device"] or "cpu"
+    embedding_batch_size = embedding_runtime["embedding_batch_size"] or 16
+    embedding_max_tokens = embedding_runtime["embedding_max_tokens"] or 7500
+    embedding_prefix = embedding_runtime["embedding_prefix"]
+    if embedding_provider == "huggingface":
+        embedding_base_url = None
+    else:
+        embedding_base_url = embedding_runtime["embedding_base_url"] or "http://localhost:11434"
     override_config.update({
         "provider": provider,
         "model": model,
         "embedding_provider": embedding_provider,
         "embedding_model": embedding_model,
         "embedding_dim": embedding_dim,
+        "embedding_device": embedding_device,
+        "embedding_batch_size": embedding_batch_size,
+        "embedding_max_tokens": embedding_max_tokens,
     })
+    if embedding_prefix is not None:
+        override_config["embedding_prefix"] = embedding_prefix
     if args.local_llm_backend == "turboquant":
         # Local llama-server has finite KV cache; keep build/query LLM calls serial by default.
         llm_max_async = args.llm_max_async or 1
@@ -159,6 +197,10 @@ def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, 
         "embedding_provider": embedding_provider,
         "embedding_model": embedding_model,
         "embedding_dim": embedding_dim,
+        "embedding_device": embedding_device,
+        "embedding_batch_size": embedding_batch_size,
+        "embedding_max_tokens": embedding_max_tokens,
+        "embedding_prefix": embedding_prefix,
         "embedding_base_url": embedding_base_url,
         "wire_protocol": wire_protocol,
         "api_key": api_key,
@@ -257,9 +299,42 @@ def main() -> None:
     )
     parser.add_argument(
         "--embedding_provider",
-        choices=["openai", "azure", "bedrock", "ollama"],
+        choices=["openai", "azure", "bedrock", "ollama", "huggingface"],
         default=None,
         help="Override embedding provider from config",
+    )
+    parser.add_argument(
+        "--embedding_model",
+        default=None,
+        help="Embedding model name for Ollama or HuggingFace embeddings.",
+    )
+    parser.add_argument(
+        "--embedding_dim",
+        type=int,
+        default=None,
+        help="Embedding vector dimension.",
+    )
+    parser.add_argument(
+        "--embedding_device",
+        default=None,
+        help="Embedding device for HuggingFace embeddings, e.g. cpu or cuda.",
+    )
+    parser.add_argument(
+        "--embedding_batch_size",
+        type=int,
+        default=None,
+        help="Embedding batch size for HuggingFace embeddings.",
+    )
+    parser.add_argument(
+        "--embedding_max_tokens",
+        type=int,
+        default=None,
+        help="Embedding max sequence length for HuggingFace embeddings.",
+    )
+    parser.add_argument(
+        "--embedding_prefix",
+        default=None,
+        help="Embedding prefix for HuggingFace embeddings, e.g. search_document: ",
     )
     parser.add_argument(
         "--local_llm_backend",
@@ -281,17 +356,6 @@ def main() -> None:
         "--embedding_base_url",
         default=None,
         help="Ollama embedding base URL (default: http://localhost:11434)",
-    )
-    parser.add_argument(
-        "--embedding_model",
-        default=None,
-        help="Embedding model name for Ollama embeddings. Default: nomic-embed-text",
-    )
-    parser.add_argument(
-        "--embedding_dim",
-        type=int,
-        default=None,
-        help="Embedding vector dimension. Default: 768 for nomic-embed-text; use 1024 for bge-m3.",
     )
     parser.add_argument(
         "--llm_max_async",

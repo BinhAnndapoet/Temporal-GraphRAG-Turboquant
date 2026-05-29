@@ -250,51 +250,19 @@ Giả sử bạn muốn so sánh hai kết quả query gần nhất:
 - `results/preds/pred_ctx24k_v2_hf_local384.jsonl`
 - `results/preds/pred_fresh_v2_hf_local10.jsonl`
 
-Chạy:
+Phần lệnh copy-paste đã được đặt ở đầu file trong mục **Quick copy-paste**.
 
-```bash
-python -u scripts/eval/run_metric_suite.py \
-  --predictions \
-  results/preds/pred_ctx24k_v2_hf_local384.jsonl \
-  results/preds/pred_fresh_v2_hf_local10.jsonl \
-  --output_root results/metrics/metric_suite \
-  --compare
-```
+Ở đây chỉ cần nhớ:
 
-Nếu muốn giữ cả câu unanswerable trong thống kê:
-
-```bash
-python -u scripts/eval/run_metric_suite.py \
-  --predictions \
-  results/preds/pred_ctx24k_v2_hf_local384.jsonl \
-  results/preds/pred_fresh_v2_hf_local10.jsonl \
-  --output_root results/metrics/metric_suite \
-  --compare \
-  --include_unanswerable
-```
+- `run_metric_suite.py` dùng để chấm non-LLM metrics và compare 2 file prediction.
+- `--compare` là chế độ so sánh trực tiếp hai file.
+- `--include_unanswerable` giữ các câu không trả lời được trong thống kê nếu bạn cần.
 
 ### Chạy toàn bộ nhóm trong một lệnh
 
-Khi bạn đã có đủ input cho các nhóm, chạy một lệnh kiểu:
+Khi bạn đã có đủ input cho các nhóm, hãy xem mục **Quick copy-paste** ở đầu file để lấy lệnh one-shot.
 
-```bash
-python -u scripts/eval/run_metric_pipeline.py \
-  --all \
-  --specific_predictions \
-  results/preds/pred_ctx24k_v2_hf_local384.jsonl \
-  results/preds/pred_fresh_v2_hf_local10.jsonl \
-  --judge_provider gemini \
-  --output_root results/metrics/pipeline
-```
-
-Nếu sau này bạn có thêm 2 file abstract prediction, chỉ cần thêm:
-
-```bash
-  --abstract_predictions_a results/preds/<abstract_a>.jsonl \
-  --abstract_predictions_b results/preds/<abstract_b>.jsonl
-```
-
-Khi đó một lệnh sẽ chạy hết các nhóm đã khai báo.
+Nếu sau này bạn có thêm 2 file abstract prediction, pipeline sẽ tự mở rộng phần abstract khi truyền đủ input tương ứng.
 
 ### Phạm vi tự động hóa hiện tại
 
@@ -441,58 +409,21 @@ File compare có:
 
 - `num_overlap_questions`
 - `same_prediction_count`
-- `better_a_count_f1`
-- `better_b_count_f1`
-- `mean_delta_f1`
-- `mean_delta_rouge_l`
-
-### Detail JSONL
-
-Mỗi dòng có:
+Xem lệnh tương ứng trong phần **Quick copy-paste**.
 
 - question
 - answer
-- prediction_a / prediction_b
-- f1_a / f1_b
-- rouge_l_a / rouge_l_b
-- delta_f1 / delta_rouge_l
-
-Đây là file quan trọng nhất nếu bạn muốn debug tại sao một run tốt hơn run kia.
-
----
-
-## 11) Full command theo nhóm
-
-### Nhóm specific: non-LLM metrics
-
+Chạy theo mức batch ở phần **Quick copy-paste** hoặc phần batch quota ở mục 12 nếu cần nối tiếp.
 ```bash
 python -u scripts/eval/run_metric_suite.py \
   --predictions \
-  results/preds/pred_ctx24k_v2_hf_local384.jsonl \
-  results/preds/pred_fresh_v2_hf_local10.jsonl \
-  --output_root results/metrics/metric_suite \
-  --compare
-```
-
-### Nhóm specific: Gemini judge
-
-```bash
-python -u scripts/eval/judge_specific.py \
+Mẫu lệnh chi tiết xem ở phần batch quota nếu bạn cần chia nhỏ số câu.
   --predictions results/preds/pred_ctx24k_v2_hf_local384.jsonl \
   --output results/judged/pred_ctx24k_v2_hf_local384_gemini.jsonl \
   --judge_provider gemini \
-  --judge_model gemini-2.5-flash-lite
+Xem lại khối **Chạy toàn bộ nhóm đã có input** ở đầu file; phần dưới chỉ giữ giải thích về phạm vi áp dụng.
 
-python -u scripts/eval/judge_specific.py \
-  --predictions results/preds/pred_fresh_v2_hf_local10.jsonl \
-  --output results/judged/pred_fresh_v2_hf_local10_gemini.jsonl \
-  --judge_provider gemini \
-  --judge_model gemini-2.5-flash-lite
-```
-
-### Nhóm abstract: Gemini pairwise judge
-
-```bash
+Nếu chưa có abstract prediction files thì pipeline vẫn chạy phần specific; phần abstract chỉ bật khi bạn truyền đủ 2 file abstract.
 python -u scripts/eval/judge_pairwise_abstract.py \
   --predictions_a results/preds/<abstract_a>.jsonl \
   --predictions_b results/preds/<abstract_b>.jsonl \
@@ -564,3 +495,5 @@ thì cần:
 2. Chạy lại pipeline judge
 
 Các output lỗi vẫn được giữ trong `results/judged/**` và log trong `logs/metrics/pipeline/**`, nên bạn có thể dùng chúng để debug, nhưng để có kết quả judge thật thì cần key hợp lệ.
+
+Nếu bạn muốn tránh quota hơn nữa, hãy quay lại phần **Quick copy-paste** và chạy với `--limit` nhỏ hơn rồi `--resume` sau.

@@ -33,6 +33,31 @@ Ví dụ folder đúng của bạn:
 
 ---
 
+## 1.1 Canonical query command (khuyến nghị, ít lỗi nhất)
+
+Nếu bạn đang chạy local `llama-server` turboquant ở `http://localhost:8080/v1`, dùng lệnh này để query ổn định:
+
+```bash
+python query_graph.py \
+  --question "What was EOG Resources, Inc.'s free cash flow in each quarter for 2021-Q4, 2022-Q1, and 2022-Q2?" \
+  --working_dir outputs/build_graph/BUILD_qwen25_7b_p4_c131072_hf_nomic_cuda_384docs_fresh-v2 \
+  --mode local \
+  --local_llm_backend turboquant \
+  --model qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072 \
+  --base_url http://localhost:8080/v1 \
+  --llm_max_async 4 \
+  --llm_timeout 900 \
+  --show_retrieval
+```
+
+Lưu ý:
+
+- `--model` phải khớp server alias.
+- `--llm_max_async` nên khớp `llama-server --parallel`.
+- Nếu dùng demo UI cùng lúc, để `Provider=openai` với cùng model/base_url để tránh lệch behavior.
+
+---
+
 ## 2. Chuẩn Bị Môi Trường
 
 Trước khi query, bật đúng conda env và vào đúng repo:
@@ -48,6 +73,24 @@ Nếu bạn dùng local LLM qua `llama-server`, server phải đang chạy ở:
 ```text
 http://localhost:8080/v1
 ```
+
+### 2.1 Quy tắc key/provider cho query (không nhầm nữa)
+
+| Backend bạn đang dùng | `--local_llm_backend` | Key cần set |
+|---|---|---|
+| OpenAI cloud | (không bắt buộc local backend) | `OPENAI_API_KEY` thật |
+| Local `llama-server` OpenAI-compatible | `turboquant` (hoặc dùng provider openai trong demo) | `OPENAI_API_KEY=dummy` (non-empty) |
+| Gemini API | (không dùng local llama-server) | `GOOGLE_API_KEY`/`GEMINI_API_KEY` thật |
+| Ollama | `ollama` | Không cần key |
+
+**Gợi ý an toàn nhất cho local `llama-server`:**
+
+```bash
+export OPENAI_API_KEY=dummy
+export OPENAI_BASE_URL=http://localhost:8080/v1
+```
+
+Lý do: một số luồng khởi tạo kiểm tra key với provider không phải `ollama`; dùng key dummy giúp tránh fail do validate môi trường.
 
 ---
 

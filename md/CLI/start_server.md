@@ -16,6 +16,61 @@ Embedding có thể chạy riêng qua Ollama hoặc HuggingFace trong `build_gra
 
 ---
 
+## One-command launcher (khuyến nghị nhanh nhất)
+
+Nếu muốn tránh lỗi timing khi `curl /v1/models` quá sớm, dùng script helper:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+bash scripts/run_demo_stack.sh
+```
+
+Script này sẽ:
+
+1. Start `llama-server` trong tmux session `llm_srv`
+2. Chờ đến khi endpoint `http://127.0.0.1:8080/v1/models` sẵn sàng
+3. Start Streamlit demo trong tmux session `demo`
+
+Tùy chọn:
+
+```bash
+# chỉ start server
+bash scripts/run_demo_stack.sh --server-only
+
+# không kill session cũ trước khi start
+bash scripts/run_demo_stack.sh --no-restart
+
+# tăng timeout chờ server
+bash scripts/run_demo_stack.sh --wait-timeout 180
+```
+
+---
+
+## TL;DR — Canonical server command (khuyến nghị cho demo hiện tại)
+
+Nếu bạn muốn **chạy lại đúng 1 cấu hình ổn định** để khớp build/query/demo hiện tại, dùng block này:
+
+```bash
+tmux kill-session -t llm_srv 2>/dev/null || true
+tmux new -s llm_srv -d
+tmux send-keys -t llm_srv "conda activate turboquant && cd /home/guest/Projects/Research/llama-cpp-turboquant && ./build/bin/llama-server \
+  -m /home/guest/Projects/Research/llama-cpp-turboquant/models/qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf \
+  --alias qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072 \
+  --host 127.0.0.1 --port 8080 \
+  -ctk q8_0 -ctv turbo3 -fa on -ngl 99 \
+  -c 131072 --parallel 4 --n-predict 3072" C-m
+
+curl -sS http://localhost:8080/v1/models
+```
+
+Model alias phải khớp với bên query/demo. Với cấu hình trên, alias chuẩn là:
+
+`qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072`
+
+**Ghi chú quan trọng:** trong app demo, `Provider=openai` là đường API khuyến nghị cho local `llama-server` OpenAI-compatible.
+
+---
+
 ## 0. Quy Ước Đặt Tên Để Copy Dễ
 
 Để tránh nhầm giữa server / build / query, nên giữ tên theo mẫu sau:

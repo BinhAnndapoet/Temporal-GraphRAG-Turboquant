@@ -15,10 +15,13 @@ File này giúp bạn biết nên đọc gì trước, theo đúng mục tiêu l
 3. `md/runbooks/turboquant_intervention_modes_cli.md`  
    → TurboQuant can thiệp từng phần hay toàn bộ, kèm CLI mode rõ ràng.
 
-4. `md/metrics/tgrag_metrics_execution_runbook.md`  
+4. `md/runbooks/demo_setup_and_db_graph_flow.md`  
+   → Giải thích `demo.py`, cách DB Graph đi vào qua `working_dir`, và checklist setup demo đầy đủ.
+
+5. `md/metrics/tgrag_metrics_execution_runbook.md`  
    → Cách chạy để sinh kết quả metric thực tế (bao gồm p95/p99, CI, disagreement).
 
-5. `md/runbooks/experiment_matrix_turboquant_vs_baseline.md`  
+6. `md/runbooks/experiment_matrix_turboquant_vs_baseline.md`  
    → Ma trận thí nghiệm đề xuất để so sánh baseline vs turboquant công bằng.
 
 ---
@@ -28,6 +31,7 @@ File này giúp bạn biết nên đọc gì trước, theo đúng mục tiêu l
 - Server + build/query CLI: đọc `md/CLI/start_server.md`, `md/CLI/build_graph.md`, `md/CLI/query_graph.md`
 - Tuning inference: đọc `md/CLI/inference_config.md`
 - Can thiệp mode TurboQuant: đọc `md/runbooks/turboquant_intervention_modes_cli.md`
+- One-command launcher (server + demo): chạy `bash scripts/run_demo_stack.sh`
 
 ---
 

@@ -186,15 +186,13 @@ def main():
         st.header("Configuration")
 
         with st.expander("Quick Start (Recommended)", expanded=False):
-            st.markdown(
-                """
+            st.markdown("""
                 - For local `llama-server` use: **Provider = openai**
                 - Base URL: `http://localhost:8080/v1`
                 - Model: must match server `--alias`
                 - Working Directory: absolute path to a valid `outputs/build_graph/BUILD_*` folder
                 - In local mode: enable retrieval and choose seed method
-                """
-            )
+                """)
 
         config_path = st.text_input("Config Path", value="tgrag/configs/config.yaml")
         working_dir = st.text_input("Working Directory", value="")
@@ -221,7 +219,9 @@ def main():
                 st.session_state.enable_entity_retrieval_toggle = True
                 st.session_state.seed_node_method_select = "entities"
                 if st.session_state.model_input in ["", "gpt-4o-mini"]:
-                    st.session_state.model_input = "qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072"
+                    st.session_state.model_input = (
+                        "qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072"
+                    )
             elif preset == "Local Turboquant provider (advanced)":
                 st.session_state.provider_select = "turboquant"
                 st.session_state.base_url_input = "http://localhost:8080/v1"
@@ -229,7 +229,9 @@ def main():
                 st.session_state.enable_entity_retrieval_toggle = True
                 st.session_state.seed_node_method_select = "entities"
                 if st.session_state.model_input in ["", "gpt-4o-mini"]:
-                    st.session_state.model_input = "qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072"
+                    st.session_state.model_input = (
+                        "qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072"
+                    )
             elif preset == "Gemini API":
                 st.session_state.provider_select = "gemini"
                 st.session_state.base_url_input = ""
@@ -240,7 +242,9 @@ def main():
                     st.session_state.model_input = "gemini-2.5-flash"
             elif preset == "Ollama local":
                 st.session_state.provider_select = "ollama"
-                st.session_state.base_url_input = os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434"
+                st.session_state.base_url_input = (
+                    os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434"
+                )
                 st.session_state.query_mode_select = "local"
                 st.session_state.enable_entity_retrieval_toggle = True
                 st.session_state.seed_node_method_select = "entities"
@@ -334,10 +338,14 @@ def main():
         if provider == "openai":
             default_api_key_from_env = os.getenv("OPENAI_API_KEY")
         elif provider == "gemini":
-            default_api_key_from_env = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+            default_api_key_from_env = os.getenv("GOOGLE_API_KEY") or os.getenv(
+                "GEMINI_API_KEY"
+            )
         elif provider == "turboquant":
             # keep env fallback for turboquant path without showing API key input in UI
-            default_api_key_from_env = os.getenv("OPENAI_API_KEY_TEMPORALRAG") or os.getenv("OPENAI_API_KEY")
+            default_api_key_from_env = os.getenv(
+                "OPENAI_API_KEY_TEMPORALRAG"
+            ) or os.getenv("OPENAI_API_KEY")
 
         if provider_requires_key_input:
             env_key_hint = {
@@ -360,8 +368,7 @@ def main():
         # Keep retrieval settings compact and show only when relevant
         if mode == "local":
             with st.expander("Retrieval Settings", expanded=False):
-                st.markdown(
-                    """
+                st.markdown("""
                     **How these settings affect local retrieval:**
 
                     - **Enable Entity Retrieval**
@@ -373,13 +380,14 @@ def main():
                       - `relations`: start from relation search first (useful when query emphasizes relationships)
 
                     If you get `Seed Nodes = 0`, try: `Enable Entity Retrieval = ON` and `Seed Node Method = entities`.
-                    """
-                )
+                    """)
                 enable_entity_retrieval = st.checkbox(
                     "Enable Entity Retrieval", key="enable_entity_retrieval_toggle"
                 )
                 seed_node_method = st.selectbox(
-                    "Seed Node Method", ["entities", "relations"], key="seed_node_method_select"
+                    "Seed Node Method",
+                    ["entities", "relations"],
+                    key="seed_node_method_select",
                 )
         else:
             # Defaults for non-local modes
@@ -575,8 +583,7 @@ def main():
                     st.warning(
                         "No seed nodes were retrieved. This is usually a configuration issue (not necessarily bad build output)."
                     )
-                    st.markdown(
-                        """
+                    st.markdown("""
                         **Checklist:**
                         1. `Working Directory` points to correct `BUILD_*` folder
                         2. Provider/backend match:
@@ -584,8 +591,7 @@ def main():
                            - `gemini` => valid `GOOGLE_API_KEY`/`GEMINI_API_KEY`
                         3. In `local` mode, ensure retrieval settings are enabled
                         4. Model name matches server alias exactly
-                        """
-                    )
+                        """)
         else:
             st.info("Please configure settings in the sidebar and click 'Run Query'.")
 

@@ -44,6 +44,34 @@ bash scripts/run_demo_stack.sh --no-restart
 bash scripts/run_demo_stack.sh --wait-timeout 180
 ```
 
+### One-command launcher cho build 7B p2/c131072
+
+Nếu bạn muốn **tạo 2 tmux session riêng** cho **server** và **build** bằng một lệnh duy nhất, dùng script này:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+bash scripts/run_7b_build_stack.sh
+```
+
+Script sẽ tạo:
+
+1. `llm_srv` — chạy `llama-server` 7B p2/c131072
+2. `build_7b` — chạy `build_graph.py` với HuggingFace embedding
+
+Muốn đổi output dir hoặc số docs:
+
+```bash
+bash scripts/run_7b_build_stack.sh \
+  --output-dir outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v2 \
+  --num-docs 384
+```
+
+Nếu chỉ muốn start server (không build):
+
+```bash
+bash scripts/run_7b_build_stack.sh --server-only
+```
+
 ---
 
 ## TL;DR — Canonical server command (khuyến nghị cho demo hiện tại)

@@ -14,6 +14,32 @@ Mục tiêu là giúp bạn trả lời 3 câu hỏi:
 
 Đây là luồng khuyến nghị duy nhất cho localLLM + Turboquant runtime (`llama-server`):
 
+### Quy tắc quan trọng nhất: `working_dir` khác `provider/model`
+
+- `working_dir` là **nơi chứa graph artifacts đã build xong** (`graphml`, `kv_store_*.json`, `vdb_*.json`)
+- `provider / model / base_url / api key` là **LLM dùng ở bước query**
+
+Vì vậy:
+
+- Bạn **có thể** query một `working_dir` build từ 7B local bằng `gemini`
+- Bạn **cũng có thể** query cùng một `working_dir` bằng `openai` local `llama-server`
+- Cái cần giữ ổn định khi so sánh là: chỉ đổi **1 thứ** tại một thời điểm
+
+Ví dụ:
+
+- So sánh 2 build khác nhau: giữ provider/query giống nhau, chỉ đổi `working_dir`
+- So sánh 2 LLM khác nhau trên cùng graph: giữ `working_dir` giống nhau, chỉ đổi provider/model
+
+### Nếu UI nhìn như bị “đứng”
+
+`Run Query` chạy đồng bộ trên cùng một luồng Streamlit nên khi query dài hoặc render graph lớn, giao diện sẽ **không tương tác được cho tới khi xong**.
+
+Đây thường là trạng thái đang xử lý, không phải crash. Để test nhanh hơn:
+
+- tắt `Show Graph Visualization` ở lần test đầu
+- đừng bấm `Apply Preset` liên tục khi chưa cần
+- đợi spinner/response xong rồi hãy đổi `working_dir` hoặc provider
+
 ### Cách nhanh nhất (1 lệnh, tránh lỗi startup timing)
 
 ```bash

@@ -32,6 +32,7 @@ File này giúp bạn biết nên đọc gì trước, theo đúng mục tiêu l
 - Tuning inference: đọc `md/CLI/inference_config.md`
 - Can thiệp mode TurboQuant: đọc `md/runbooks/turboquant_intervention_modes_cli.md`
 - One-command launcher (server + demo): chạy `bash scripts/run_demo_stack.sh`
+- One-command launcher (server + 7B build): chạy `bash scripts/run_7b_build_stack.sh`
 
 ---
 

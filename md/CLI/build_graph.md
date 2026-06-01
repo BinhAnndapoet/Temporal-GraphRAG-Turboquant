@@ -46,6 +46,131 @@ Các lỗi cũ cần tránh:
 | Lỗi | Run kiểm chứng | Nguyên nhân | Hướng tránh |
 |---|---|---|---|
 | Community report vượt context | 7B p4 50 docs, 14B p2/c32k 50 docs | `--parallel` chia context thành slot nhỏ, prompt community dài | Dùng p2/c64k cho 7B; nếu còn lỗi thì p1 |
+
+### One-command launcher cho 7B build
+
+Nếu bạn muốn **một lệnh tạo 2 tmux session riêng** (`llm_srv` và `build_7b`) thì dùng:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+bash scripts/run_7b_build_stack.sh
+```
+
+Script này mặc định:
+
+- server 7B Q8
+- `--parallel 2`
+- `-c 131072`
+- HuggingFace embedding `nomic-ai/nomic-embed-text-v1.5`
+- build output: `outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_fresh-v2`
+
+Script cũng có chặn an toàn:
+
+- nếu `--output-dir` đã tồn tại và không rỗng, nó sẽ dừng thay vì ghi đè
+- nếu usage log cùng basename đã tồn tại, script sẽ cảnh báo để bạn đổi basename của output dir
+
+Muốn đổi output dir (ví dụ `v2`):
+
+```bash
+bash scripts/run_7b_build_stack.sh \
+  --output-dir outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v2
+```
+
+Lý do khuyến nghị `p2`:
+
+- `p4` làm mỗi slot nhỏ hơn, prompt community level 0 dễ chạm trần hơn
+- `p2` cho headroom tốt hơn để community report và JSON output ổn định hơn
+
+### Manual workflow: 2 tmux session riêng, full CLI
+
+Nếu bạn muốn nhìn rõ từng bước hơn, đây là cách chạy **thủ công** với **2 tmux session riêng**:
+
+#### Bước 1: mở session server
+
+```bash
+tmux new -s llm_srv
+```
+
+Trong session đó, chạy server 7B:
+
+```bash
+conda activate turboquant
+cd /home/guest/Projects/Research/llama-cpp-turboquant
+
+./build/bin/llama-server \
+  -m /home/guest/Projects/Research/llama-cpp-turboquant/models/qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf \
+  --alias qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p2-np3072 \
+  --host 127.0.0.1 \
+  --port 8080 \
+  -ctk q8_0 \
+  -ctv turbo3 \
+  -fa on \
+  -ngl 99 \
+  -c 131072 \
+  --parallel 2 \
+  --n-predict 3072
+```
+
+#### Bước 2: kiểm tra server đã sẵn sàng
+
+```bash
+curl -sS http://localhost:8080/v1/models
+```
+
+#### Bước 3: mở session build riêng
+
+```bash
+tmux new -s build_7b
+```
+
+Trong session build, chạy `build_graph.py` với output mới:
+
+```bash
+conda activate turboquant
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+
+export HF_HOME=/home/guest/Projects/Research/.cache/huggingface
+export TRANSFORMERS_CACHE=/home/guest/Projects/Research/.cache/huggingface/transformers
+export TOKENIZERS_PARALLELISM=false
+export TG_RAG_USAGE_LOG=/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/results/usage/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v2.jsonl
+
+python -u build_graph.py \
+  --output_dir outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v2 \
+  --model qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p2-np3072 \
+  --base_url http://localhost:8080/v1 \
+  --corpus_path ect-qa/corpus/base.jsonl.gz \
+  --local_llm_backend turboquant \
+  --embedding_provider huggingface \
+  --embedding_model nomic-ai/nomic-embed-text-v1.5 \
+  --embedding_dim 768 \
+  --embedding_max_tokens 7500 \
+  --embedding_max_chars 24000 \
+  --embedding_device cpu \
+  --embedding_batch_size 16 \
+  --embedding_batch_num 16 \
+  --embedding_max_async 1 \
+  --embedding_prefix "search_document: " \
+  --chunk_size 1200 \
+  --chunk_overlap 100 \
+  --num_docs 384 \
+  --llm_max_async 2 \
+  --llm_timeout 900 \
+  --entity_extraction_timeout 43200
+```
+
+#### Ghi chú để không đụng run cũ
+
+- `--output_dir` mới là thư mục graph output, không nên trỏ lại `fresh-v2` hoặc `v2` cũ nếu bạn muốn giữ nguyên run trước.
+- `TG_RAG_USAGE_LOG` nên đổi theo basename của output dir để log không bị trộn.
+- Nếu bạn muốn đổi `p`, `model`, hoặc `ctx`, hãy sửa trực tiếp các tham số `--parallel`, `--alias`, `-c`, `--n-predict` trong block server.
+
+#### Tương ứng nhanh giữa tmux và CLI
+
+| Session | Nhiệm vụ | CLI chính |
+|---|---|---|
+| `llm_srv` | chạy LLM server | `./build/bin/llama-server ...` |
+| `build_7b` | chạy graph build | `python -u build_graph.py ...` |
+
 ---
 
 ## 2. Chuẩn Bị Môi Trường HuggingFace Embedding

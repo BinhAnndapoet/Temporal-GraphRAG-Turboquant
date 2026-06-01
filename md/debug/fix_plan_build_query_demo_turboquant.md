@@ -981,6 +981,182 @@ Lý do:
 
 ---
 
+## 10.3 Ghi chú riêng về HuggingFace embedding vs Ollama embedding
+
+Phần này cần nói rất rõ, vì nếu diễn đạt sai thì sau này benchmark sẽ bị hiểu nhầm.
+
+### 10.3.1 Kết luận ngắn
+
+Nếu bạn muốn dùng `huggingface` embedding cho graph build và query, điều đó là hợp lý.
+
+Nhưng lý do đúng nên viết là:
+
+```text
+HF embedding trong repo hiện tại kiểm soát được sequence length / prefix / device / batch rõ hơn,
+không phải cứ mặc định là "HF luôn có context window dài hơn Ollama" trong mọi cách chạy.
+```
+
+### 10.3.2 Source code hiện tại cho thấy gì
+
+#### Nhánh HuggingFace
+
+File:
+
+```text
+tgrag/src/llm/huggingface_embedding.py
+```
+
+Code hiện tại:
+
+```python
+model = SentenceTransformer(
+    model_name,
+    device=device,
+    trust_remote_code=trust_remote_code,
+)
+model.max_seq_length = max_tokens
+```
+
+và:
+
+```python
+async def huggingface_embedding(
+    texts: List[str],
+    model: str = "nomic-ai/nomic-embed-text-v1.5",
+    device: str = "cpu",
+    batch_size: int = 16,
+    max_tokens: int = 7500,
+    prefix: str = "search_document: ",
+```
+
+Nguồn:
+
+- `tgrag/src/llm/huggingface_embedding.py:32-38`
+- `tgrag/src/llm/huggingface_embedding.py:42-49`
+
+Điều này có nghĩa là nhánh HF trong repo đang cho bạn kiểm soát trực tiếp:
+
+- `embedding_model`
+- `embedding_device`
+- `embedding_batch_size`
+- `embedding_max_tokens`
+- `embedding_prefix`
+
+#### Nhánh Ollama
+
+File:
+
+```text
+tgrag/src/llm/embedding.py
+```
+
+Code hiện tại:
+
+```python
+@wrap_embedding_func_with_attrs(embedding_dim=768, max_token_size=8192)
+async def ollama_embedding(
+    texts: List[str],
+    model: str = "nomic-embed-text",
+    base_url: Optional[str] = None
+) -> np.ndarray:
+    ...
+    payload = {
+        "model": model,
+        "prompt": text,
+    }
+```
+
+Nguồn:
+
+- `tgrag/src/llm/embedding.py:117-123`
+- `tgrag/src/llm/embedding.py:141-148`
+
+Điều quan trọng là:
+
+- code Ollama hiện **không có tham số** `max_tokens`
+- code Ollama hiện **không có tham số** `prefix`
+- code Ollama hiện chỉ gửi raw `prompt` sang `/api/embeddings`
+
+Nói ngắn:
+
+```text
+HF path trong repo được điều khiển rõ hơn.
+Ollama path trong repo hiện đơn giản hơn và ít "guard rail" hơn.
+```
+
+### 10.3.3 Về context/window của chính model Nomic
+
+Theo model card chính thức của `nomic-ai/nomic-embed-text-v1.5`, model này hỗ trợ long-context và bảng trong model card ghi:
+
+- `nomic-embed-text-v1.5` có `SeqLen 8192`
+- model card cũng nói model hỗ trợ scale sequence length vượt `2048`
+
+Nguồn:
+
+- Hugging Face model card: https://huggingface.co/nomic-ai/nomic-embed-text-v1.5
+
+Trong khi đó, phía Ollama hiện có dấu hiệu không nhất quán ở tài liệu public:
+
+- trang library của `nomic-embed-text` hiển thị `2K context window`
+- nhưng blob params public của model lại có `num_ctx: 8192`
+
+Nguồn:
+
+- Ollama library page: https://ollama.com/library/nomic-embed-text
+- Ollama params blob: https://ollama.com/library/nomic-embed-text/blobs/ce4a164fc046
+
+Vì vậy, nếu viết thật chặt chẽ thì phải nói:
+
+```text
+không nên lấy "HF dài hơn Ollama" làm luận điểm tuyệt đối.
+Điều chắc chắn hơn là:
+HF path trong repo hiện cho phép bạn kiểm soát và tái lập cấu hình embedding tốt hơn.
+```
+
+### 10.3.4 Vậy trong repo này, khi nào nên ưu tiên HF embedding?
+
+Nên ưu tiên `huggingface` embedding khi:
+
+1. bạn muốn build/query với `nomic-ai/nomic-embed-text-v1.5`
+2. bạn cần kiểm soát rõ `embedding_max_tokens`
+3. bạn cần dùng đúng prefix:
+   - build/index: `search_document:`
+   - query: `search_query:`
+4. bạn muốn benchmark retrieval tái lập được
+
+### 10.3.5 Vì sao demo hiện tại vẫn chưa phù hợp cho benchmark nghiêm túc với HF-built graph
+
+Không phải vì HF embedding có vấn đề.
+
+Lý do thật là:
+
+- demo hiện chưa có field embedding đầy đủ
+- demo chưa đọc manifest build
+- demo chưa tự ép `embedding_provider/model/prefix/max_tokens` theo graph đã build
+
+Nên câu cần ghi rõ là:
+
+```text
+demo hiện tại chưa phù hợp để benchmark nghiêm túc với graph build bằng HF embedding,
+không phải vì HF embedding kém,
+mà vì demo chưa đảm bảo query-time embedding bám đúng build-time embedding.
+```
+
+### 10.3.6 Câu khuyến nghị nên dùng trong docs
+
+Có thể dùng nguyên văn câu sau:
+
+```text
+Nếu graph được build bằng HuggingFace embedding, đặc biệt là `nomic-ai/nomic-embed-text-v1.5`,
+hãy ưu tiên CLI cho benchmark.
+Lý do không phải chỉ vì "HF có context dài hơn Ollama",
+mà vì nhánh HF trong repo hiện cho phép kiểm soát `embedding_model`, `embedding_device`,
+`embedding_batch_size`, `embedding_max_tokens` và `embedding_prefix` rõ hơn,
+giúp retrieval tái lập được hơn so với demo/UI hiện tại.
+```
+
+---
+
 ## 11. Hướng chạy hiện tại nếu CHƯA patch code
 
 Phần này là workaround để bạn dùng ngay với code hiện tại.

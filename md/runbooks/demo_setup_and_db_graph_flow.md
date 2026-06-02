@@ -12,7 +12,11 @@ Mục tiêu là giúp bạn trả lời 3 câu hỏi:
 
 ## TL;DR — Canonical workflow để chạy lại demo không lỗi
 
-Đây là luồng khuyến nghị duy nhất cho localLLM + Turboquant runtime (`llama-server`):
+Đây là luồng canonical hiện tại cho localLLM + TurboQuant runtime (`llama-server`):
+
+- server: `p2 + c131072`
+- graph output: build từ `main` hiện tại, có `build_manifest.json`
+- query/demo: bám lại manifest đó với HF-built graph
 
 ### Quy tắc quan trọng nhất: `working_dir` khác `provider/model`
 
@@ -60,10 +64,10 @@ tmux kill-session -t llm_srv 2>/dev/null || true
 tmux new -s llm_srv -d
 tmux send-keys -t llm_srv "conda activate turboquant && cd /home/guest/Projects/Research/llama-cpp-turboquant && ./build/bin/llama-server \
   -m /home/guest/Projects/Research/llama-cpp-turboquant/models/qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf \
-  --alias qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072 \
+  --alias qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p2-np3072 \
   --host 127.0.0.1 --port 8080 \
   -ctk q8_0 -ctv turbo3 -fa on -ngl 99 \
-  -c 131072 --parallel 4 --n-predict 3072" C-m
+  -c 131072 --parallel 2 --n-predict 3072" C-m
 
 curl -sS http://localhost:8080/v1/models
 ```
@@ -79,12 +83,13 @@ tmux send-keys -t demo "cd /home/guest/Projects/Research/Temporal-GraphRAG-Turbo
 ### Bước 3: Điền UI đúng 100%
 
 - `Provider (API path)`: `openai`  ✅ (khuyến nghị cho local llama-server)
-- `Model`: `qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072`
+- `Model`: `qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p2-np3072`
 - `Base URL`: `http://localhost:8080/v1`
-- `Working Directory`: folder `outputs/build_graph/BUILD_*` đúng run bạn đã build
+- `Working Directory`: folder `outputs/build_graph/BUILD_*` đúng run bạn đã build trên `main` hiện tại
 - `Query Mode`: `local`
 - `Enable Entity Retrieval`: ON
 - `Seed Node Method`: `entities`
+- `Use build manifest defaults`: ON nếu trong `working_dir` có `build_manifest.json`
 
 ### Bước 3.1: Dùng Preset để tránh nhập sai
 
@@ -101,8 +106,9 @@ Preset này tự điền các trường quan trọng:
 
 Sau đó bạn chỉ cần kiểm tra lại:
 
-- `Model` khớp alias server
+- `Model` khớp alias server đang chạy; với flow canonical hiện tại là `...c131072-p2...`
 - `Working Directory` đúng folder `BUILD_*`
+- nếu `working_dir` có `build_manifest.json`, để `Use build manifest defaults` bật
 
 ### Khi nào mới chọn `Provider = turboquant`?
 
@@ -126,6 +132,16 @@ Chỉ khi bạn muốn test nhánh provider turboquant trong app logic. Runtime 
 - Từ `working_dir`, source code tự load toàn bộ graph artifacts đã build sẵn.
 
 Nếu bạn muốn dùng Neo4j thật sự, thì đó là một nhánh riêng qua `addon_params.neo4j_url` và `addon_params.neo4j_auth`, nhưng `demo.py` hiện tại **chưa expose UI cho phần đó**.
+
+### Canonical demo flow hiện tại
+
+Nếu mục tiêu của bạn là local TurboQuant + HF-built graph trên code hiện tại, hãy giữ đúng các điểm này:
+
+1. `working_dir` nên là output build mới có `build_manifest.json`
+2. `Provider=openai`, `Base URL=http://localhost:8080/v1`
+3. `Model` phải khớp alias server thực tế; canonical hiện tại là `qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p2-np3072`
+4. trong demo, bật `Use build manifest defaults` để query-time embedding bám lại build-time embedding
+5. nếu dùng output cũ như `fresh_v2` hoặc `v3` chưa có manifest, bạn phải điền lại embedding/runtime bằng tay và coi đó là case legacy
 
 ### 1.1 Ma trận quyết định Provider / Key / Base URL (rất quan trọng)
 
@@ -283,7 +299,9 @@ Mình đã đổi sang `st.warning(...)` để tránh crash khi underlying graph
 
 ---
 
-## 5. Config demo hiện tại đang ánh xạ gì
+## 5. Ví dụ config legacy đang ánh xạ gì
+
+Phần này dùng `tgrag/configs/config_eval_ollama_nomic_fast.yaml` để giải thích source code và mapping field. Nó **không phải** runbook canonical cho local TurboQuant + HF-built graph trên `main` hiện tại.
 
 File config đang mở là `tgrag/configs/config_eval_ollama_nomic_fast.yaml`.
 
@@ -642,6 +660,14 @@ Nếu bạn muốn, tài liệu tiếp theo mình có thể viết thêm là:
 
 Phần này giải thích rõ ràng `working_dir` xuất phát từ đâu, file nào sẽ có trong nó sau khi build, và các bước cụ thể bạn cần làm (copy-paste) để build + chạy demo.
 
+Lưu ý: từ đây trở xuống vẫn có vài ví dụ dùng `config_eval_ollama_nomic_fast.yaml` và `./output_ollama_eval` để giải thích source mapping lịch sử của repo. Với flow canonical hiện tại cho local TurboQuant + HF-built graph, hãy ưu tiên `working_dir` kiểu:
+
+```text
+outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v4
+```
+
+và bật `Use build manifest defaults` trong demo nếu thư mục đó có `build_manifest.json`.
+
 ### 11.1 Từ đâu `working_dir` được định nghĩa
 
 - `working_dir` có thể được đặt trong 3 nơi (ưu tiên theo thứ tự):
@@ -649,7 +675,7 @@ Phần này giải thích rõ ràng `working_dir` xuất phát từ đâu, file 
   2. Bị override bởi `override_config` khi gọi `create_temporal_graphrag_from_config(...)` (ví dụ demo UI truyền giá trị sidebar vào `override_config`).
   3. Tham số CLI khi gọi script build (nếu script hỗ trợ tham số `--output` / `--working_dir`).
 
-Ví dụ trong `tgrag/configs/config_eval_ollama_nomic_fast.yaml` bạn đã thấy `working_dir: "./output_ollama_eval"` — đó là nơi build sẽ ghi artifact mặc định.
+Ví dụ trong `tgrag/configs/config_eval_ollama_nomic_fast.yaml` bạn đã thấy `working_dir: "./output_ollama_eval"` — đó là nơi build sẽ ghi artifact mặc định cho case legacy đó. Với flow canonical hiện tại, `working_dir` nên là output build mới có manifest.
 
 ### 11.2 Những file artifact chính sẽ có trong `working_dir`
 
@@ -726,9 +752,10 @@ streamlit run demo.py
 
 6) In the demo sidebar:
 
-- `Config Path`: chọn `tgrag/configs/config_eval_ollama_nomic_fast.yaml` (hoặc file config bạn dùng).
-- `Working Directory`: điền `./output_ollama_eval` (hoặc đường dẫn tương ứng đến folder bạn vừa build).
+- `Config Path`: chọn file config query bạn đang dùng; với flow canonical chỉ cần file query hợp lệ vì runtime chính sẽ được lấy lại từ `build_manifest.json`.
+- `Working Directory`: điền folder output build mới, ví dụ `outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v4`.
 - `Provider/Model/Base URL`: chọn phù hợp với server đang chạy.
+- `Use build manifest defaults`: bật nếu `working_dir` có `build_manifest.json`.
 
 7) Nhấn `Run Query` và bật `Show Graph Visualization` nếu cần.
 
@@ -746,7 +773,10 @@ streamlit run demo.py
 
 ```python
 from tgrag import create_temporal_graphrag_from_config
-g = create_temporal_graphrag_from_config(config_path='tgrag/configs/config_eval_ollama_nomic_fast.yaml', override_config={'querying':{'working_dir':'./output_ollama_eval'}})
+g = create_temporal_graphrag_from_config(
+    config_path='tgrag/configs/config_eval_ollama_nomic_fast.yaml',
+    override_config={'querying': {'working_dir': 'outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v4'}}
+)
 print(g.chunk_entity_relation_graph._graph)
 ```
 
@@ -802,4 +832,3 @@ Nếu bạn muốn, mình có thể tiếp tục sửa `demo.py` để:
 - auto-gợi ý `Base URL` theo provider,
 - prefill `Model` theo provider,
 - và hiển thị một dòng chú thích ngay dưới ô nhập để khỏi phải đoán nữa.
-

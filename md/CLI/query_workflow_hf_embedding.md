@@ -13,8 +13,8 @@ File này ngắn và ưu tiên copy lệnh.
 Lưu ý với code hiện tại:
 
 - `query_graph.py`, `run_batch_queries.py` và demo đã biết đọc `build_manifest.json` nếu output có file này
-- nhưng các output cũ như `fresh_v2` hoặc build đang chạy từ code cũ thường chưa có manifest
-- vì vậy với output cũ, bạn vẫn nên truyền rõ HF embedding args trong các lệnh mẫu bên dưới
+- canonical flow trên `main` bây giờ là: build bằng nhánh code mới, output có manifest, query/demo bám lại runtime đó
+- các output cũ như `fresh_v2` hoặc `v3` vẫn chưa có manifest, nên với chúng bạn vẫn nên truyền rõ HF embedding args trong các lệnh mẫu bên dưới
 
 ---
 
@@ -26,11 +26,10 @@ Dùng file này nếu build của bạn có dạng như:
 outputs/build_graph/BUILD_qwen25_7b_*_hf_nomic_* 
 ```
 
-Ví dụ:
+Ví dụ canonical:
 
 ```text
-outputs/build_graph/BUILD_qwen25_7b_p4_c131072_hf_nomic_cuda_384docs_fresh-v2
-outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v3
+outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v4
 ```
 
 Không dùng file này cho:
@@ -70,7 +69,7 @@ Bạn cần thấy build đi đến cuối và không còn tiếp tục ghi thê
 Đặt biến trước:
 
 ```bash
-WORKDIR=/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v3
+WORKDIR=/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v4
 ```
 
 Sau đó kiểm tra:
@@ -224,7 +223,7 @@ python query_graph.py \
 - retrieval vẫn là HF Nomic
 - chỉ đổi generator từ local TurboQuant sang Gemini
 
-Đây là cách so sánh sạch nhất trước khi patch code query.
+Đây là cách so sánh sạch nhất trên code hiện tại sau khi query branch đã merge.
 
 ---
 
@@ -236,7 +235,7 @@ python query_graph.py \
 python scripts/eval/run_batch_queries.py \
   --working_dir "$WORKDIR" \
   --questions ect-qa/questions/local_new.jsonl \
-  --output results/preds/pred_v3_turboquant_hf_local_new.jsonl \
+  --output results/preds/pred_v4_turboquant_hf_local_new.jsonl \
   --mode local \
   --local_llm_backend turboquant \
   --llm_model "$MODEL_ALIAS" \
@@ -257,7 +256,7 @@ python scripts/eval/run_batch_queries.py \
 python scripts/eval/run_batch_queries.py \
   --working_dir "$WORKDIR" \
   --questions ect-qa/questions/local_new.jsonl \
-  --output results/preds/pred_v3_turboquant_hf_local_new.jsonl \
+  --output results/preds/pred_v4_turboquant_hf_local_new.jsonl \
   --mode local \
   --local_llm_backend turboquant \
   --llm_model "$MODEL_ALIAS" \
@@ -281,7 +280,7 @@ python scripts/eval/run_batch_queries.py \
 python scripts/eval/run_batch_queries.py \
   --working_dir "$WORKDIR" \
   --questions ect-qa/questions/local_new.jsonl \
-  --output results/preds/pred_v3_gemini_hf_local_new.jsonl \
+  --output results/preds/pred_v4_gemini_hf_local_new.jsonl \
   --mode local \
   --provider gemini \
   --model gemini-2.5-flash \
@@ -300,15 +299,15 @@ python scripts/eval/run_batch_queries.py \
 Kết luận phải nói rõ:
 
 ```text
-demo hiện tại dùng được để smoke test tương tác,
-chưa nên dùng để benchmark nghiêm túc với graph build bằng HF embedding.
+demo hiện tại đã biết đọc build manifest và có thể đi đúng HF-built graph,
+nhưng vẫn nên coi là smoke test runtime/UI trước khi benchmark batch bằng CLI.
 ```
 
 Lý do:
 
-- demo chưa ép query-time embedding bám đúng build-time embedding
-- demo chưa có manifest build
-- demo hiện dễ làm người dùng tưởng chỉ đổi LLM, nhưng thực tế retrieval runtime có thể bị lệch
+- demo giờ đã có thể reuse build-time runtime từ `build_manifest.json`
+- nhưng UI vẫn ít kiểm soát hơn CLI cho benchmark hàng loạt
+- preset trong UI giúp điền nhanh provider/base_url/mode, nhưng bạn vẫn phải xác nhận `Model` khớp alias server đang chạy
 
 ### 10.1 Nếu vẫn muốn dùng demo để test nhanh
 
@@ -319,28 +318,29 @@ Lý do:
 - `Base URL`: `http://localhost:8080/v1`
 - `Working Directory`: đúng `WORKDIR`
 - `Query Mode`: `local`
+- `Use build manifest defaults`: bật nếu `WORKDIR` có `build_manifest.json`
 
 Và nhớ:
 
 ```text
-Kết quả demo chỉ nên coi là smoke test UI/runtime,
-không nên coi là metric benchmark cuối cho HF-built graph.
+Kết quả demo nên coi là smoke test UI/runtime.
+Batch benchmark cuối vẫn nên chạy bằng query_graph.py hoặc run_batch_queries.py.
 ```
 
 ---
 
-## 11. Bạn đang chờ build `v3` xong thì nên làm gì
+## 11. Nếu bạn đang chờ full build mới xong thì nên làm gì
 
 Thứ tự hợp lý:
 
-1. chờ build `v3` xong
+1. chờ build mới xong hẳn
 2. kiểm tra `WORKDIR`
 3. chạy single query local TurboQuant
 4. chạy single query Gemini trên cùng graph
 5. chạy batch ECT-QA local
-6. sau đó mới quyết định có cần patch query branch ngay hay không
+6. sau đó mới quyết định có cần debug tiếp retrieval/query quality hay không
 
-Nếu mục tiêu của bạn là ưu tiên fix query branch trước, thì `v3` output này vẫn dùng được để:
+Nếu mục tiêu của bạn là test query trên output cũ chưa có manifest, thì các run kiểu `v3` vẫn dùng được để:
 
 - test `query_graph.py`
 - test `run_batch_queries.py`

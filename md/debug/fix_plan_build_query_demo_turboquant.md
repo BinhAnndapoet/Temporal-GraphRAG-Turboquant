@@ -5,9 +5,14 @@ Ngày soạn: 2026-06-02
 Trạng thái tài liệu này:
 
 - Đây là kế hoạch fix chi tiết và runbook vận hành.
-- Chưa sửa code trong repo ở bước này.
-- Chưa tạo branch fix ở bước này.
-- Chưa chạy benchmark lại ở bước này.
+- Tài liệu này phản ánh kế hoạch gốc tại thời điểm chưa sửa code.
+- Sau đó đã có hai nhánh triển khai riêng:
+  - query/demo: `fix/local-runtime-query-demo-endtoend`
+  - build/community: `fix/build-community-budget-v4`
+- Tài liệu kết quả triển khai và test thực tế:
+  - [v3_build_failure_analysis.md](./v3_build_failure_analysis.md)
+  - [build_community_v3_to_v4_root_cause_and_fix.md](./build_community_v3_to_v4_root_cause_and_fix.md)
+  - [v4_build_fix_test_10docs.md](./v4_build_fix_test_10docs.md)
 
 Tài liệu gốc phân tích nguyên nhân:
 

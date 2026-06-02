@@ -31,6 +31,9 @@ File này giúp bạn biết nên đọc gì trước, theo đúng mục tiêu l
 - Server + build/query CLI: đọc `md/CLI/start_server.md`, `md/CLI/build_graph.md`, `md/CLI/query_graph.md`
 - Tuning inference: đọc `md/CLI/inference_config.md`
 - Can thiệp mode TurboQuant: đọc `md/runbooks/turboquant_intervention_modes_cli.md`
+- Nếu bạn đang xử lý lỗi build community local: đọc thêm
+  - `md/debug/build_community_v3_to_v4_root_cause_and_fix.md`
+  - `md/debug/v4_build_fix_test_10docs.md`
 - One-command launcher (server + demo): chạy `bash scripts/run_demo_stack.sh`
 - One-command launcher (server + 7B build): chạy `bash scripts/run_7b_build_stack.sh`
 
@@ -107,6 +110,10 @@ md/
 
 - Mục tiêu: ghi lại symptom → root cause → fix path cho các lỗi lớn.
 - Dùng khi cần triage nhanh, không dùng thay cho tài liệu vận hành chuẩn.
+- Ví dụ hiện tại:
+  - `build_community_v3_to_v4_root_cause_and_fix.md`
+  - `v3_build_failure_analysis.md`
+  - `v4_build_fix_test_10docs.md`
 
 ### `md/temporal-graphrag/` — kiến trúc và lý thuyết TG-RAG
 

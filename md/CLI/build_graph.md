@@ -17,8 +17,63 @@ Mục tiêu chính:
 
 ```text
 md/CLI/start_server.md
+md/debug/build_community_v3_to_v4_root_cause_and_fix.md
+md/debug/v4_build_fix_test_10docs.md
 md/debug/debug_localLLM_log_results.md
 md/runbooks/resume_setup.md
+```
+
+---
+
+## 0. Cập Nhật Sau Nhánh Fix Build `v4`
+
+Trạng thái mới nhất cần hiểu đúng:
+
+```text
+nhánh build hiện đã sửa root cause community fail của v3
+và đã pass test local 10 docs với p2/c131072 + HF embedding
+nhưng chưa có bằng chứng full 384 docs đã sạch hoàn toàn
+```
+
+Điểm mới của `build_graph.py` trên nhánh build:
+
+- tự đọc `llama-server /props`
+- tự suy ra `server_slot_tokens`
+- tự clamp `best_model_max_token_size`
+- ghi `build_manifest.json` vào `working_dir`
+
+Artifact test đã có:
+
+- [md/debug/build_community_v3_to_v4_root_cause_and_fix.md](../debug/build_community_v3_to_v4_root_cause_and_fix.md)
+- [md/debug/v4_build_fix_test_10docs.md](../debug/v4_build_fix_test_10docs.md)
+
+### 0.1 Điều phải nhớ khi đọc log
+
+- `TG_RAG_USAGE_LOG` chỉ ghi usage JSONL.
+- Muốn có build log text, shell phải dùng `tee` hoặc redirect stdout/stderr.
+- Nếu chạy bằng `conda run` trong tmux và muốn log stream ra file đúng, dùng:
+
+```bash
+conda run --no-capture-output -n turboquant python -u build_graph.py ... |& tee logs/build_graph/<run>.log
+```
+
+### 0.2 Điều phải nhớ về budget build
+
+Với local `llama-server`, budget build không nên hiểu theo `-c` danh nghĩa của server, mà theo slot thực:
+
+```text
+slot_context = floor(n_ctx / parallel)
+```
+
+Ví dụ:
+
+- `-c 131072 --parallel 2` => slot thực `65536`
+- `-c 131072 --parallel 4` => slot thực `32768`
+
+Nhánh build mới hiện tự resolve budget an toàn theo:
+
+```text
+best_model_max_token_size ~= slot_context - community_token_headroom
 ```
 
 ---
@@ -28,7 +83,8 @@ md/runbooks/resume_setup.md
 Kết luận hiện tại phải nói rõ:
 
 ```text
-HF embedding đã pass smoke build 1/5/10 docs với 7B p2/c64k.
+HF embedding đã pass smoke build nhỏ trên 7B p2.
+Mốc mới nhất của nhánh build v4 là 10 docs với p2/c131072.
 Chưa có bằng chứng HF embedding đã pass 50/100/384 docs.
 Vì vậy chưa gọi là ổn định full 384, chỉ gọi là ổn định bước đầu.
 ```
@@ -163,6 +219,18 @@ python -u build_graph.py \
 - `--output_dir` mới là thư mục graph output, không nên trỏ lại `fresh-v2` hoặc `v2` cũ nếu bạn muốn giữ nguyên run trước.
 - `TG_RAG_USAGE_LOG` nên đổi theo basename của output dir để log không bị trộn.
 - Nếu bạn muốn đổi `p`, `model`, hoặc `ctx`, hãy sửa trực tiếp các tham số `--parallel`, `--alias`, `-c`, `--n-predict` trong block server.
+- Sau khi build xong, kiểm tra thêm file:
+
+```text
+outputs/build_graph/<run>/build_manifest.json
+```
+
+Nếu nhánh build mới đã được merge, file này phải có:
+
+- `build_status`
+- `server_slot_tokens`
+- `best_model_max_token_size`
+- `budget_resolution`
 
 #### Tương ứng nhanh giữa tmux và CLI
 
@@ -170,6 +238,55 @@ python -u build_graph.py \
 |---|---|---|
 | `llm_srv` | chạy LLM server | `./build/bin/llama-server ...` |
 | `build_7b` | chạy graph build | `python -u build_graph.py ...` |
+
+### Manual workflow bằng `conda run` + `tee`
+
+Nếu bạn không muốn `conda activate` trong tmux mà muốn gọi một lệnh gọn, dùng mẫu này để không bị mất build log:
+
+```bash
+tmux new -s build_7b
+```
+
+Trong tmux:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+
+export HF_HOME=/home/guest/Projects/Research/.cache/huggingface
+export TRANSFORMERS_CACHE=/home/guest/Projects/Research/.cache/huggingface/transformers
+export TOKENIZERS_PARALLELISM=false
+export OPENAI_API_KEY=dummy
+export TG_RAG_USAGE_LOG=/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/results/usage/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v4.jsonl
+
+conda run --no-capture-output -n turboquant python -u build_graph.py \
+  --output_dir /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/outputs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v4 \
+  --model qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p2-np3072 \
+  --base_url http://127.0.0.1:8080/v1 \
+  --corpus_path /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/ect-qa/corpus/base.jsonl.gz \
+  --local_llm_backend turboquant \
+  --embedding_provider huggingface \
+  --embedding_model nomic-ai/nomic-embed-text-v1.5 \
+  --embedding_dim 768 \
+  --embedding_max_tokens 7500 \
+  --embedding_max_chars 24000 \
+  --embedding_device cuda \
+  --embedding_batch_size 16 \
+  --embedding_batch_num 16 \
+  --embedding_max_async 1 \
+  --embedding_prefix "search_document: " \
+  --chunk_size 1200 \
+  --chunk_overlap 100 \
+  --num_docs 384 \
+  --llm_max_async 2 \
+  --llm_timeout 900 \
+  --entity_extraction_timeout 43200 \
+  |& tee /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/logs/build_graph/BUILD_qwen25_7b_p2_c131072_hf_nomic_cuda_384docs_v4.log
+```
+
+Muốn chạy smoke test như `v4` đã test thì chỉ cần đổi:
+
+- `--num_docs 384` thành `--num_docs 10`
+- basename `_384docs_v4` thành `_010docs_v4`
 
 ---
 
@@ -855,4 +972,3 @@ Trước khi chạy 384 nhiều lần, nên cân nhắc thêm:
 - community rebuild-only
 
 Nếu chưa có resume, 384 fail ở cuối sẽ tốn rất nhiều thời gian chạy lại.
-

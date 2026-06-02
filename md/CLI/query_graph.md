@@ -9,6 +9,22 @@ Mục tiêu chính:
 - Biết đủ CLI args để chạy `local`, `global`, `naive`.
 - Tránh nhầm giữa folder build và folder export Neo4j.
 
+Nếu case của bạn là:
+
+- graph build bằng `huggingface` embedding
+- local LLM chạy qua `llama-server` TurboQuant
+- muốn query cùng một `working_dir` bằng TurboQuant hoặc Gemini
+
+thì nên đọc file ngắn này trước:
+
+- [md/CLI/query_workflow_hf_embedding.md](/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/md/CLI/query_workflow_hf_embedding.md:1)
+- [md/CLI/config_profiles_ect_gpu.md](/home/guest/Projects/Research/Temporal-GraphRAG-Turboquant/md/CLI/config_profiles_ect_gpu.md:1)
+
+Lưu ý runtime mới:
+
+- nếu `working_dir` có `build_manifest.json`, `query_graph.py` và `run_batch_queries.py` sẽ tự đọc lại embedding build-time để fill các field còn thiếu
+- nếu `working_dir` là output cũ như `fresh_v2`/`v3` chưa có manifest, bạn vẫn nên truyền rõ `--embedding_provider`, `--embedding_model` và với HF Nomic thì thêm `--embedding_prefix "search_query: "`
+
 ---
 
 ## 1. Query Đúng Vào Folder Nào?
@@ -45,7 +61,13 @@ python query_graph.py \
   --local_llm_backend turboquant \
   --model qwen25-7b-q8-ctkq8-ctvturbo3-c131072-p4-np3072 \
   --base_url http://localhost:8080/v1 \
-  --llm_max_async 4 \
+  --embedding_provider huggingface \
+  --embedding_model nomic-ai/nomic-embed-text-v1.5 \
+  --embedding_device cuda \
+  --embedding_batch_size 16 \
+  --embedding_max_tokens 7500 \
+  --embedding_prefix "search_query: " \
+  --llm_max_async 1 \
   --llm_timeout 900 \
   --show_retrieval
 ```
@@ -53,7 +75,8 @@ python query_graph.py \
 Lưu ý:
 
 - `--model` phải khớp server alias.
-- `--llm_max_async` nên khớp `llama-server --parallel`.
+- với output cũ chưa có manifest, command mẫu nên truyền đủ HF embedding như trên.
+- `--llm_max_async` cho single-query local nên để `1`; không cần bám `llama-server --parallel` khi chỉ hỏi một câu mỗi lần.
 - Nếu dùng demo UI cùng lúc, để `Provider=openai` với cùng model/base_url để tránh lệch behavior.
 
 ---

@@ -88,6 +88,19 @@ PROMPTS = _PromptsProxy()
 # Import CommunitySchema for type hints
 from ..core.types import CommunitySchema as CommunitySchemaType
 
+
+def _stringify_context_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except TypeError:
+            return str(value)
+    return str(value)
+
 # Helper function: merge edges round robin
 def merge_edges_round_robin(entity_edge_lists: list[list[dict]], top_k: int) -> list[dict]:
     merged_edges = []
@@ -1629,14 +1642,14 @@ async def _supplemental_evidence_retrieval(
         try:
             relation_results = await _get_seed_nodes_from_relations(query, relations_vdb, query_param.top_k, knowledge_graph_inst)
             if relation_results:
-                relation_node_datas = await asyncio.gather(
+                relation_node_packs = await asyncio.gather(
                     *[knowledge_graph_inst.get_node(r["entity_name"]) for r in relation_results]
                 )
                 node_degrees = await asyncio.gather(
                     *[knowledge_graph_inst.node_degree(r["entity_name"]) for r in relation_results]
                 )
                 relation_node_datas = []
-                for k, n, d in zip(relation_results, relation_node_datas, node_degrees):
+                for k, n, d in zip(relation_results, relation_node_packs, node_degrees):
                     if n is not None:
                         rank = await calculate_temporal_aware_rank(
                             n, 
@@ -1679,14 +1692,14 @@ async def _supplemental_evidence_retrieval(
                                                                         top_k=query_param.top_k)
                     
                     if broader_results:
-                        broader_node_datas = await asyncio.gather(
+                        broader_node_packs = await asyncio.gather(
                             *[knowledge_graph_inst.get_node(r["entity_name"]) for r in broader_results]
                         )
                         broader_node_degrees = await asyncio.gather(
                             *[knowledge_graph_inst.node_degree(r["entity_name"]) for r in broader_results]
                         )
                         broader_node_datas = []
-                        for k, n, d in zip(broader_results, broader_node_datas, broader_node_degrees):
+                        for k, n, d in zip(broader_results, broader_node_packs, broader_node_degrees):
                             if n is not None:
                                 rank = await calculate_temporal_aware_rank(
                                     n, 
@@ -1708,14 +1721,14 @@ async def _supplemental_evidence_retrieval(
         try:
             general_results = await entities_vdb.query(query, top_k=query_param.top_k * 2)
             if general_results:
-                general_node_datas = await asyncio.gather(
+                general_node_packs = await asyncio.gather(
                     *[knowledge_graph_inst.get_node(r["entity_name"]) for r in general_results]
                 )
                 general_node_degrees = await asyncio.gather(
                     *[knowledge_graph_inst.node_degree(r["entity_name"]) for r in general_results]
                 )
                 general_node_datas = []
-                for k, n, d in zip(general_results, general_node_datas, general_node_degrees):
+                for k, n, d in zip(general_results, general_node_packs, general_node_degrees):
                     if n is not None:
                         rank = await calculate_temporal_aware_rank(
                             n, 
@@ -1742,15 +1755,21 @@ async def _supplemental_evidence_retrieval(
         except Exception as e:
             logger.warning(f"Failed to get additional relations: {e}")
     
-    try:
-        additional_communities = await _find_most_related_temporal_community_from_entities(
-            query_param, community_reports, aligned_timestamp_in_query
-        )
-        existing_community_ids = {c.get('id', '') for c in existing_evidence.get('communities', [])}
-        new_communities = [c for c in additional_communities if c.get('id', '') not in existing_community_ids]
-        additional_evidence['communities'] = new_communities
-    except Exception as e:
-        logger.warning(f"Failed to get additional communities: {e}")
+    if additional_evidence['entities']:
+        try:
+            if aligned_timestamp_in_query:
+                additional_communities = await _find_most_related_temporal_community_from_entities(
+                    query_param, community_reports, aligned_timestamp_in_query
+                )
+            else:
+                additional_communities = await _find_most_related_community_from_entities(
+                    additional_evidence['entities'], query_param, community_reports
+                )
+            existing_community_ids = {c.get('id', '') for c in existing_evidence.get('communities', [])}
+            new_communities = [c for c in additional_communities if c.get('id', '') not in existing_community_ids]
+            additional_evidence['communities'] = new_communities
+        except Exception as e:
+            logger.warning(f"Failed to get additional communities: {e}")
     
     if query_param.local_max_token_for_text_unit and additional_evidence['entities']:
         try:
@@ -1834,9 +1853,17 @@ async def _build_local_query_context(
     
     min_evidence_required = 4
     current_evidence_count = len(node_datas) + len(use_relations) + len(use_communities) + len(use_text_units)
-    
-    if current_evidence_count < min_evidence_required:
-        logger.warning(f"Insufficient evidence retrieved ({current_evidence_count} < {min_evidence_required}). Attempting additional retrieval...")
+    graph_evidence_count = len(node_datas) + len(use_relations) + len(use_communities)
+    need_supplemental = (
+        current_evidence_count < min_evidence_required or graph_evidence_count == 0
+    )
+
+    if need_supplemental:
+        logger.warning(
+            "Insufficient graph evidence retrieved. "
+            f"graph_evidence={graph_evidence_count} total_evidence={current_evidence_count}. "
+            "Attempting additional retrieval..."
+        )
         
         additional_evidence = await _supplemental_evidence_retrieval(
             query, entities_vdb, relations_vdb, knowledge_graph_inst,
@@ -1854,6 +1881,21 @@ async def _build_local_query_context(
     node_datas_time = [n for n in node_datas if n["entity_type"].lower() in PROMPTS['DEFAULT_TEMPORAL_HIERARCHY']]
     node_datas = [n for n in node_datas if n["entity_type"].lower() not in PROMPTS['DEFAULT_TEMPORAL_HIERARCHY']]
 
+    deduped_text_units = []
+    seen_text_units = set()
+    for chunk in use_text_units:
+        chunk_key = (
+            chunk.get("id", ""),
+            chunk.get("full_doc_id", ""),
+            chunk.get("chunk_order_index", -1),
+            chunk.get("content", "")[:160],
+        )
+        if chunk_key in seen_text_units:
+            continue
+        seen_text_units.add(chunk_key)
+        deduped_text_units.append(chunk)
+    use_text_units = deduped_text_units
+
     node_datas = truncate_list_by_token_size(
         node_datas,
         key=lambda x: x.get("description", "UNKNOWN"),
@@ -1869,31 +1911,12 @@ async def _build_local_query_context(
     )
     
     logger.info(f"After truncation: {len(use_relations)} relations kept (token limit: {int(query_param.local_max_token_for_local_context * 0.8)})")
-
+    
     logger.info(
         f"For query: {query}, Using {len(node_datas)} entities, {len(use_communities)} communities, {len(use_relations)} relations, {len(use_text_units)} text units"
     )
-    
-    # <-- CẬP NHẬT THÊM CÁC THÔNG TIN RETRIEVAL DETAILS SẴN CÓ VÀO DICT
-    if retrieval_detail is not None:
-        retrieval_detail.update({
-            "entity": len(node_datas),
-            "relation": len(use_relations),
-            "community": len(use_communities),
-            "text_units": len(use_text_units),
-            "total_evidence": len(node_datas) + len(use_relations) + len(use_communities) + len(use_text_units)
-        })
-    
-    retrieval_details_summary = {
-        "entity": len(node_datas),
-        "relation": len(use_relations),
-        "community": len(use_communities),
-        "text_units": len(use_text_units),
-        "total_evidence": len(node_datas) + len(use_relations) + len(use_communities) + len(use_text_units)
-    }
-    
-    logger.info("Building context for LOCAL query ")
-    logger.info("Only using text units (original chunks), not entities/relations/communities")
+
+    logger.info("Building context for LOCAL query")
     
     if full_docs_db is None:
         full_docs_db = global_config.get("full_docs")
@@ -1901,43 +1924,148 @@ async def _build_local_query_context(
             full_docs_db = global_config.full_docs
     if full_docs_db is None:
         logger.warning("[BUILD CONTEXT] full_docs not available in global_config, will use fallback document IDs")
-    
-    processed_chunks = []
-    chunk_formatter = """---NEW CHUNK---
-Document Title: {full_doc_title}
-Chunk Order Index: {chunk_order_index}
-Chunk Content:
-{chunk_content}
----END OF CHUNK---
 
-"""
-    
-    for i, chunk in enumerate(use_text_units):
-        chunk_content = chunk.get("content", "")
-        chunk_order_index = chunk.get("chunk_order_index", i)
-        full_doc_id = chunk.get("full_doc_id", "")
-        
-        full_doc_title = "Unknown Document"
-        if full_docs_db and full_doc_id:
-            try:
-                doc_data = await full_docs_db.get_by_id(full_doc_id)
-                if doc_data:
-                    full_doc_title = doc_data.get("title", full_doc_id)
-            except Exception as e:
-                logger.debug(f"Could not retrieve title for doc {full_doc_id}: {e}")
-                full_doc_title = full_doc_id
-        
-        formatted_chunk = chunk_formatter.format(
-            chunk_content=chunk_content,
-            chunk_order_index=chunk_order_index,
-            full_doc_title=full_doc_title
+    context_sections = []
+
+    if node_datas_time:
+        temporal_rows = [["id", "entity_name", "entity_type", "rank", "description"]]
+        for index, node in enumerate(node_datas_time, start=1):
+            temporal_rows.append(
+                [
+                    index,
+                    node.get("entity_name", ""),
+                    node.get("entity_type", ""),
+                    node.get("rank", ""),
+                    _stringify_context_value(node.get("description", "")),
+                ]
+            )
+        context_sections.append(
+            ("Temporal Focus", list_of_list_to_csv(temporal_rows))
         )
-        processed_chunks.append(formatted_chunk)
-    
-    context = "".join(processed_chunks)
-    
-    logger.info(f"[BUILD CONTEXT] Final context built: {len(use_text_units)} text chunks formatted")
-    logger.info(f"[BUILD CONTEXT] Skipped {len(node_datas)} entities, {len(use_relations)} relations, {len(use_communities)} communities")
+
+    if node_datas:
+        entity_rows = [["id", "entity_name", "entity_type", "rank", "description"]]
+        for index, node in enumerate(node_datas, start=1):
+            entity_rows.append(
+                [
+                    index,
+                    node.get("entity_name", ""),
+                    node.get("entity_type", ""),
+                    node.get("rank", ""),
+                    _stringify_context_value(node.get("description", "")),
+                ]
+            )
+        context_sections.append(("Entities", list_of_list_to_csv(entity_rows)))
+
+    if use_relations:
+        relation_rows = [["id", "source", "target", "rank", "weight", "description"]]
+        for index, relation in enumerate(use_relations, start=1):
+            src_tgt = relation.get("src_tgt", ("", ""))
+            src = src_tgt[0] if len(src_tgt) > 0 else ""
+            tgt = src_tgt[1] if len(src_tgt) > 1 else ""
+            relation_rows.append(
+                [
+                    index,
+                    src,
+                    tgt,
+                    relation.get("rank", ""),
+                    relation.get("weight", ""),
+                    _stringify_context_value(relation.get("description", "")),
+                ]
+            )
+        context_sections.append(("Relationships", list_of_list_to_csv(relation_rows)))
+
+    if use_communities:
+        community_rows = [["id", "title", "rating", "importance", "content"]]
+        for index, community in enumerate(use_communities, start=1):
+            community_rows.append(
+                [
+                    community.get("id", index),
+                    community.get("title", ""),
+                    community.get("report_json", {}).get("rating", ""),
+                    len(community.get("temporal_edges", [])) + len(community.get("nodes", [])),
+                    _stringify_context_value(community.get("report_string", "")),
+                ]
+            )
+        context_sections.append(("Communities", list_of_list_to_csv(community_rows)))
+
+    if use_text_units:
+        chunk_rows = [["id", "document_title", "chunk_order_index", "content"]]
+        for index, chunk in enumerate(use_text_units, start=1):
+            chunk_content = chunk.get("content", "")
+            chunk_order_index = chunk.get("chunk_order_index", index - 1)
+            full_doc_id = chunk.get("full_doc_id", "")
+
+            full_doc_title = "Unknown Document"
+            if full_docs_db and full_doc_id:
+                try:
+                    doc_data = await full_docs_db.get_by_id(full_doc_id)
+                    if doc_data:
+                        full_doc_title = doc_data.get("title", full_doc_id)
+                except Exception as e:
+                    logger.debug(f"Could not retrieve title for doc {full_doc_id}: {e}")
+                    full_doc_title = full_doc_id
+            elif full_doc_id:
+                full_doc_title = full_doc_id
+
+            chunk_rows.append(
+                [
+                    chunk.get("id", index),
+                    full_doc_title,
+                    chunk_order_index,
+                    chunk_content,
+                ]
+            )
+        context_sections.append(("Source Chunks", list_of_list_to_csv(chunk_rows)))
+
+    context = "\n\n".join(
+        f"-----{section_name}-----\n{section_body}"
+        for section_name, section_body in context_sections
+        if section_body
+    )
+
+    total_evidence = len(node_datas) + len(use_relations) + len(use_communities) + len(use_text_units)
+    retrieval_details_summary = {
+        "entity": len(node_datas),
+        "relation": len(use_relations),
+        "community": len(use_communities),
+        "text_units": len(use_text_units),
+        "total_evidence": total_evidence,
+        "context_chars": len(context),
+        "context_sections": [section_name for section_name, _ in context_sections],
+    }
+
+    if retrieval_detail is not None:
+        retrieval_detail.update(retrieval_details_summary)
+        retrieval_detail["entities"] = [
+            {
+                "entity_name": node.get("entity_name", ""),
+                "entity_type": node.get("entity_type", ""),
+                "rank": node.get("rank", ""),
+            }
+            for node in node_datas[:20]
+        ]
+        retrieval_detail["relations"] = [
+            {
+                "src_tgt": relation.get("src_tgt", ("", "")),
+                "rank": relation.get("rank", ""),
+                "weight": relation.get("weight", ""),
+            }
+            for relation in use_relations[:20]
+        ]
+        retrieval_detail["communities"] = [
+            {
+                "id": community.get("id", ""),
+                "title": community.get("title", ""),
+                "rating": community.get("report_json", {}).get("rating", ""),
+            }
+            for community in use_communities[:20]
+        ]
+
+    logger.info(
+        f"[BUILD CONTEXT] Final context built with sections={retrieval_details_summary['context_sections']} "
+        f"context_chars={retrieval_details_summary['context_chars']}"
+    )
     return context, retrieval_details_summary
 
 

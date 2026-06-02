@@ -61,6 +61,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # Import from tgrag package (simplified API)
 from tgrag import create_temporal_graphrag_from_config
+from tgrag.src.config.config_loader import ConfigLoader
+from tgrag.src.utils.query_runtime import (
+    build_manifest_path,
+    infer_runtime_warnings,
+    is_local_base_url,
+    load_build_manifest,
+    resolve_query_embedding_runtime,
+)
 
 
 def format_seconds(seconds: float) -> str:
@@ -113,42 +121,32 @@ def xac_nhan_turboquant(base_url: str = None, strict: bool = False) -> bool:
     return False
 
 
-def _is_local_base_url(base_url: str) -> bool:
-    return bool(base_url) and ("localhost" in base_url or "127.0.0.1" in base_url)
-
-
 def _resolve_embedding_overrides(args):
-    embedding_provider = args.embedding_provider
-    embedding_model = args.embedding_model
-    embedding_dim = args.embedding_dim
-    embedding_device = args.embedding_device
-    embedding_batch_size = args.embedding_batch_size
-    embedding_max_tokens = args.embedding_max_tokens
-    embedding_prefix = args.embedding_prefix
-    embedding_base_url = args.embedding_base_url
-
-    if embedding_provider == "huggingface":
-        embedding_base_url = None
-
     return {
-        "embedding_provider": embedding_provider,
-        "embedding_model": embedding_model,
-        "embedding_dim": embedding_dim,
-        "embedding_device": embedding_device,
-        "embedding_batch_size": embedding_batch_size,
-        "embedding_max_tokens": embedding_max_tokens,
-        "embedding_prefix": embedding_prefix,
-        "embedding_base_url": embedding_base_url,
+        "embedding_provider": args.embedding_provider,
+        "embedding_model": args.embedding_model,
+        "embedding_dim": args.embedding_dim,
+        "embedding_device": args.embedding_device,
+        "embedding_batch_size": args.embedding_batch_size,
+        "embedding_max_tokens": args.embedding_max_tokens,
+        "embedding_prefix": args.embedding_prefix,
+        "embedding_base_url": args.embedding_base_url,
     }
 
 
-def apply_runtime_overrides(args, override_config: Dict) -> Dict:
+def apply_runtime_overrides(
+    args, override_config: Dict, config_defaults: Dict | None = None
+) -> Dict:
+    config_defaults = config_defaults or {}
+    working_dir = override_config.get("working_dir") or config_defaults.get("working_dir")
+    manifest = load_build_manifest(working_dir)
+
     if args.local_llm_backend == "turboquant":
         provider = "openai"
         model = args.model or "qwen2.5-7b-instruct-q8-turbo3"
         llm_base_url = args.base_url or "http://localhost:8080/v1"
-        embedding_provider = args.embedding_provider or "ollama"
-        embedding_base_url = args.embedding_base_url or "http://localhost:11434"
+        default_embedding_provider = None
+        default_embedding_base_url = None
         llm_max_async = args.llm_max_async or 1
         llm_timeout = args.llm_timeout or 600.0
         api_key = os.getenv("OPENAI_API_KEY") or "sk-local"
@@ -157,8 +155,8 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         provider = "ollama"
         model = args.model or "qwen3:14b"
         llm_base_url = args.base_url or "http://localhost:11434"
-        embedding_provider = args.embedding_provider or "ollama"
-        embedding_base_url = args.embedding_base_url or "http://localhost:11434"
+        default_embedding_provider = "ollama"
+        default_embedding_base_url = "http://localhost:11434"
         llm_max_async = args.llm_max_async
         llm_timeout = args.llm_timeout
         api_key = None
@@ -167,24 +165,27 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         provider = args.provider
         model = args.model
         llm_base_url = args.base_url
-        embedding_provider = args.embedding_provider
-        embedding_base_url = args.embedding_base_url
+        default_embedding_provider = None
+        default_embedding_base_url = None
         llm_max_async = args.llm_max_async
         llm_timeout = args.llm_timeout
         api_key = None
         wire_protocol = provider or "config"
-        if provider == "openai" and _is_local_base_url(llm_base_url):
+        if provider == "openai" and is_local_base_url(llm_base_url):
             api_key = os.getenv("OPENAI_API_KEY") or "sk-local"
             wire_protocol = "openai-compatible-local"
         elif provider == "ollama":
             wire_protocol = "ollama-native"
 
-    embedding_runtime = _resolve_embedding_overrides(args)
-    embedding_provider = embedding_runtime["embedding_provider"] or embedding_provider
-    if embedding_provider == "huggingface":
-        embedding_base_url = None
-    elif embedding_runtime["embedding_base_url"] is not None:
-        embedding_base_url = embedding_runtime["embedding_base_url"]
+    embedding_runtime = resolve_query_embedding_runtime(
+        explicit=_resolve_embedding_overrides(args),
+        config_defaults=config_defaults,
+        manifest=manifest,
+        default_provider=default_embedding_provider,
+        default_base_url=default_embedding_base_url,
+    )
+    embedding_provider = embedding_runtime["embedding_provider"]
+    embedding_base_url = embedding_runtime["embedding_base_url"]
 
     if provider:
         override_config["provider"] = provider
@@ -210,9 +211,6 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
     if llm_timeout:
         override_config["llm_timeout"] = llm_timeout
 
-    if not any([provider, model, llm_base_url, embedding_provider, embedding_base_url, llm_max_async, llm_timeout]):
-        return {}
-
     return {
         "local_llm_backend": args.local_llm_backend or "provider_override",
         "provider": provider or "config",
@@ -230,6 +228,15 @@ def apply_runtime_overrides(args, override_config: Dict) -> Dict:
         "llm_timeout": llm_timeout,
         "wire_protocol": wire_protocol,
         "api_key": api_key,
+        "build_manifest_path": build_manifest_path(working_dir),
+        "build_manifest_found": bool(manifest),
+        "warnings": infer_runtime_warnings(
+            working_dir=working_dir,
+            manifest=manifest,
+            config_defaults=config_defaults,
+            resolved_embedding=embedding_runtime,
+            local_llm_backend=args.local_llm_backend,
+        ),
     }
 
 
@@ -254,6 +261,14 @@ def print_runtime(runtime_config: Dict) -> None:
             extra.append(f"{key}={value}")
     if extra:
         print("[runtime] " + " ".join(extra))
+    if runtime_config.get("build_manifest_path"):
+        manifest_state = "found" if runtime_config.get("build_manifest_found") else "missing"
+        print(
+            f"[runtime] build_manifest={manifest_state} "
+            f"path={runtime_config['build_manifest_path']}"
+        )
+    for warning in runtime_config.get("warnings", []):
+        print(f"[runtime] warning={warning}")
 
 
 def main():
@@ -384,7 +399,12 @@ def main():
     override_config = {}
     if args.working_dir:
         override_config['working_dir'] = args.working_dir
-    runtime_config = apply_runtime_overrides(args, override_config)
+    config_loader = ConfigLoader(config_path=args.config)
+    config_defaults = config_loader.get_config(
+        config_type="querying",
+        override_args=override_config if override_config else None,
+    )
+    runtime_config = apply_runtime_overrides(args, override_config, config_defaults)
     
     # Create TemporalGraphRAG from config (simplified!)
     print("="*60)
@@ -434,9 +454,7 @@ def main():
     
     # Get query parameters from config or command line
     from tgrag.src.core.types import QueryParam
-    from tgrag.src.config.config_loader import ConfigLoader
-    
-    config_loader = ConfigLoader(config_path=args.config)
+
     raw_config = config_loader.get_config(config_type="querying", override_args=override_config if override_config else None)
     
     # Get query mode (command line override takes precedence)

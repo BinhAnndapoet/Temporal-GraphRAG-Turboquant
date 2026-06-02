@@ -25,50 +25,108 @@ if load_dotenv is not None:
 from tgrag import create_temporal_graphrag_from_config
 from tgrag.src.core.types import QueryParam
 from tgrag.src.config.config_loader import ConfigLoader
+from tgrag.src.utils.query_runtime import (
+    build_manifest_path,
+    infer_runtime_warnings,
+    is_local_base_url,
+    load_build_manifest,
+    resolve_query_embedding_runtime,
+)
 
 
-# Copy utility functions from query_graph.py
-def apply_runtime_overrides(args, override_config):
-    """Apply runtime overrides from CLI args to config."""
-    if args.provider:
-        override_config["provider"] = args.provider
-    if args.model:
-        override_config["model"] = args.model
-    if args.base_url:
-        override_config["llm_base_url"] = args.base_url
-    if args.embedding_base_url:
-        override_config["embedding_base_url"] = args.embedding_base_url
-    if args.local_llm_backend:
-        override_config["local_llm_backend"] = args.local_llm_backend
+def apply_runtime_overrides(
+    runtime_inputs,
+    override_config,
+    config_defaults,
+    use_build_manifest_defaults=True,
+):
+    """Resolve runtime settings for the Streamlit demo."""
+    config_defaults = config_defaults or {}
+    working_dir = override_config.get("working_dir") or config_defaults.get("working_dir")
+    manifest = load_build_manifest(working_dir) if use_build_manifest_defaults else {}
 
-    # Build runtime config
-    runtime_config = override_config.copy()
+    local_llm_backend = runtime_inputs.get("local_llm_backend")
+    provider = runtime_inputs.get("provider")
+    model = runtime_inputs.get("model")
+    llm_base_url = runtime_inputs.get("base_url")
 
-    # Set defaults
-    if "provider" not in runtime_config:
-        runtime_config["provider"] = "openai"
-    if "model" not in runtime_config:
-        runtime_config["model"] = "gpt-4o-mini"
-    if "local_llm_backend" not in runtime_config:
-        runtime_config["local_llm_backend"] = None
-    if "llm_base_url" not in runtime_config:
-        runtime_config["llm_base_url"] = None
-    if "embedding_base_url" not in runtime_config:
-        runtime_config["embedding_base_url"] = None
-    if "wire_protocol" not in runtime_config:
-        runtime_config["wire_protocol"] = "openai"
+    if local_llm_backend == "turboquant":
+        provider = "openai"
+        model = model or "qwen2.5-7b-instruct-q8-turbo3"
+        llm_base_url = llm_base_url or "http://localhost:8080/v1"
+        wire_protocol = "openai-compatible-local"
+        api_key = os.getenv("OPENAI_API_KEY") or "sk-local"
+        default_embedding_provider = None
+        default_embedding_base_url = None
+    elif local_llm_backend == "ollama":
+        provider = "ollama"
+        model = model or "qwen3:14b"
+        llm_base_url = llm_base_url or "http://localhost:11434"
+        wire_protocol = "ollama-native"
+        api_key = None
+        default_embedding_provider = "ollama"
+        default_embedding_base_url = "http://localhost:11434"
+    else:
+        wire_protocol = provider or "config"
+        api_key = None
+        default_embedding_provider = None
+        default_embedding_base_url = None
+        if provider == "openai" and is_local_base_url(llm_base_url):
+            wire_protocol = "openai-compatible-local"
+            api_key = os.getenv("OPENAI_API_KEY") or "sk-local"
+        elif provider == "ollama":
+            wire_protocol = "ollama-native"
 
-    # Set wire protocol based on backend
-    if runtime_config["local_llm_backend"] == "turboquant":
-        runtime_config["wire_protocol"] = "openai-compatible-local"
-        if "llm_base_url" not in runtime_config or not runtime_config["llm_base_url"]:
-            runtime_config["llm_base_url"] = "http://localhost:8080/v1"
-    elif runtime_config["local_llm_backend"] == "ollama":
-        runtime_config["wire_protocol"] = "ollama"
-        if "llm_base_url" not in runtime_config or not runtime_config["llm_base_url"]:
-            runtime_config["llm_base_url"] = "http://localhost:11434"
+    embedding_runtime = resolve_query_embedding_runtime(
+        explicit={
+            "embedding_provider": runtime_inputs.get("embedding_provider"),
+            "embedding_model": runtime_inputs.get("embedding_model"),
+            "embedding_dim": runtime_inputs.get("embedding_dim"),
+            "embedding_device": runtime_inputs.get("embedding_device"),
+            "embedding_batch_size": runtime_inputs.get("embedding_batch_size"),
+            "embedding_max_tokens": runtime_inputs.get("embedding_max_tokens"),
+            "embedding_prefix": runtime_inputs.get("embedding_prefix"),
+            "embedding_base_url": runtime_inputs.get("embedding_base_url"),
+        },
+        config_defaults=config_defaults,
+        manifest=manifest,
+        default_provider=default_embedding_provider,
+        default_base_url=default_embedding_base_url,
+    )
 
-    return runtime_config
+    if provider:
+        override_config["provider"] = provider
+    if model:
+        override_config["model"] = model
+    for key, value in embedding_runtime.items():
+        if value is not None:
+            override_config[key] = value
+
+    return {
+        "local_llm_backend": local_llm_backend,
+        "provider": provider or "config",
+        "model": model or "config",
+        "llm_base_url": llm_base_url,
+        "embedding_provider": embedding_runtime["embedding_provider"] or "config",
+        "embedding_model": embedding_runtime["embedding_model"],
+        "embedding_dim": embedding_runtime["embedding_dim"],
+        "embedding_device": embedding_runtime["embedding_device"],
+        "embedding_batch_size": embedding_runtime["embedding_batch_size"],
+        "embedding_max_tokens": embedding_runtime["embedding_max_tokens"],
+        "embedding_prefix": embedding_runtime["embedding_prefix"],
+        "embedding_base_url": embedding_runtime["embedding_base_url"],
+        "wire_protocol": wire_protocol,
+        "api_key": api_key,
+        "build_manifest_path": build_manifest_path(working_dir),
+        "build_manifest_found": bool(manifest),
+        "warnings": infer_runtime_warnings(
+            working_dir=working_dir,
+            manifest=manifest,
+            config_defaults=config_defaults,
+            resolved_embedding=embedding_runtime,
+            local_llm_backend=local_llm_backend,
+        ),
+    }
 
 
 def render_graph(nx_graph, retrieval_detail, output_path="graph.html"):
@@ -180,6 +238,24 @@ def main():
         st.session_state.enable_entity_retrieval_toggle = True
     if "seed_node_method_select" not in st.session_state:
         st.session_state.seed_node_method_select = "entities"
+    if "use_build_manifest_defaults_toggle" not in st.session_state:
+        st.session_state.use_build_manifest_defaults_toggle = True
+    if "embedding_provider_select" not in st.session_state:
+        st.session_state.embedding_provider_select = "auto"
+    if "embedding_model_input" not in st.session_state:
+        st.session_state.embedding_model_input = ""
+    if "embedding_dim_input" not in st.session_state:
+        st.session_state.embedding_dim_input = 0
+    if "embedding_device_input" not in st.session_state:
+        st.session_state.embedding_device_input = ""
+    if "embedding_batch_size_input" not in st.session_state:
+        st.session_state.embedding_batch_size_input = 0
+    if "embedding_max_tokens_input" not in st.session_state:
+        st.session_state.embedding_max_tokens_input = 0
+    if "embedding_prefix_input" not in st.session_state:
+        st.session_state.embedding_prefix_input = ""
+    if "embedding_base_url_input" not in st.session_state:
+        st.session_state.embedding_base_url_input = ""
 
     # Sidebar for configuration
     with st.sidebar:
@@ -197,6 +273,36 @@ def main():
         config_path = st.text_input("Config Path", value="tgrag/configs/config.yaml")
         working_dir = st.text_input("Working Directory", value="")
         question = st.text_input("Question", value="What happened in Q1 2020?")
+        manifest = load_build_manifest(working_dir) if working_dir else {}
+
+        with st.expander("Build Manifest", expanded=False):
+            use_build_manifest_defaults = st.checkbox(
+                "Use build manifest defaults",
+                key="use_build_manifest_defaults_toggle",
+                help="When enabled, runtime will reuse embedding settings from build_manifest.json if present.",
+            )
+            if working_dir:
+                manifest_path = build_manifest_path(working_dir)
+                st.caption(f"Path: `{manifest_path}`")
+                if manifest:
+                    st.success("build_manifest.json found")
+                    st.json(
+                        {
+                            "provider": manifest.get("provider"),
+                            "model": manifest.get("model"),
+                            "embedding_provider": manifest.get("embedding_provider"),
+                            "embedding_model": manifest.get("embedding_model"),
+                            "embedding_dim": manifest.get("embedding_dim"),
+                            "embedding_prefix": manifest.get("embedding_prefix"),
+                        }
+                    )
+                else:
+                    st.warning(
+                        "No build_manifest.json found in this working_dir. "
+                        "You need explicit embedding overrides if config defaults do not match the build."
+                    )
+            else:
+                st.caption("Enter a working directory to inspect build manifest.")
 
         st.subheader("Quick Preset")
         preset = st.selectbox(
@@ -365,6 +471,45 @@ def main():
             api_key_input = ""
             st.caption("Provider `ollama` does not require an API key.")
 
+        with st.expander("Embedding Settings", expanded=False):
+            st.caption(
+                "Leave fields blank or zero to follow build manifest/config. "
+                "For HuggingFace Nomic query-time, the app will use `search_query:` unless you override it."
+            )
+            embedding_provider = st.selectbox(
+                "Embedding Provider",
+                ["auto", "huggingface", "ollama", "openai", "azure", "bedrock"],
+                key="embedding_provider_select",
+            )
+            embedding_model = st.text_input("Embedding Model", key="embedding_model_input")
+            embedding_dim = st.number_input(
+                "Embedding Dim (0 = auto)",
+                min_value=0,
+                step=1,
+                key="embedding_dim_input",
+            )
+            embedding_device = st.text_input(
+                "Embedding Device", key="embedding_device_input"
+            )
+            embedding_batch_size = st.number_input(
+                "Embedding Batch Size (0 = auto)",
+                min_value=0,
+                step=1,
+                key="embedding_batch_size_input",
+            )
+            embedding_max_tokens = st.number_input(
+                "Embedding Max Tokens (0 = auto)",
+                min_value=0,
+                step=1,
+                key="embedding_max_tokens_input",
+            )
+            embedding_prefix = st.text_input(
+                "Embedding Prefix", key="embedding_prefix_input"
+            )
+            embedding_base_url = st.text_input(
+                "Embedding Base URL", key="embedding_base_url_input"
+            )
+
         # Keep retrieval settings compact and show only when relevant
         if mode == "local":
             with st.expander("Retrieval Settings", expanded=False):
@@ -404,30 +549,48 @@ def main():
                     override_config = {}
                     if working_dir:
                         override_config["working_dir"] = working_dir
-                    if provider:
-                        override_config["provider"] = provider
-                    if model:
-                        override_config["model"] = model
-                    if base_url:
-                        override_config["llm_base_url"] = base_url
                     override_config["enable_entity_retrieval"] = enable_entity_retrieval
                     override_config["seed_node_method"] = seed_node_method
 
-                    # Create a simple args object for apply_runtime_overrides
-                    class Args:
-                        def __init__(self):
-                            self.provider = provider
-                            self.model = model
-                            self.base_url = base_url
-                            self.embedding_base_url = None
-                            self.local_llm_backend = (
-                                provider
-                                if provider in ["turboquant", "ollama"]
-                                else None
-                            )
+                    config_loader = ConfigLoader(config_path=config_path)
+                    config_defaults = config_loader.get_config(
+                        config_type="querying",
+                        override_args=override_config if override_config else None,
+                    )
+                    local_llm_backend = None
+                    normalized_provider = provider
+                    if provider == "turboquant":
+                        normalized_provider = "openai"
+                        local_llm_backend = "turboquant"
+                    elif provider == "ollama":
+                        local_llm_backend = "ollama"
+                    elif provider == "openai" and is_local_base_url(base_url):
+                        local_llm_backend = "turboquant"
 
-                    args = Args()
-                    runtime_config = apply_runtime_overrides(args, override_config)
+                    runtime_inputs = {
+                        "provider": normalized_provider,
+                        "model": model or None,
+                        "base_url": base_url or None,
+                        "local_llm_backend": local_llm_backend,
+                        "embedding_provider": (
+                            None if embedding_provider == "auto" else embedding_provider
+                        ),
+                        "embedding_model": embedding_model or None,
+                        "embedding_dim": embedding_dim or None,
+                        "embedding_device": embedding_device or None,
+                        "embedding_batch_size": embedding_batch_size or None,
+                        "embedding_max_tokens": embedding_max_tokens or None,
+                        "embedding_prefix": embedding_prefix or None,
+                        "embedding_base_url": embedding_base_url or None,
+                    }
+                    runtime_config = apply_runtime_overrides(
+                        runtime_inputs,
+                        override_config,
+                        config_defaults,
+                        use_build_manifest_defaults=use_build_manifest_defaults,
+                    )
+                    for warning in runtime_config.get("warnings", []):
+                        st.sidebar.warning(warning)
 
                     # Load TemporalGraphRAG
                     # If user provided API key in UI, prefer it
@@ -466,8 +629,6 @@ def main():
                         ),
                     )
 
-                    # Load query parameters
-                    config_loader = ConfigLoader(config_path=config_path)
                     raw_config = config_loader.get_config(
                         config_type="querying",
                         override_args=override_config if override_config else None,

@@ -36,33 +36,44 @@ import logging
 import time
 from pathlib import Path
 from typing import List, Dict
+from datetime import datetime
 from dotenv import load_dotenv
 import urllib.request
+
+
+def _props_url_from_base_url(base_url: str = None) -> str:
+    base_url = base_url or os.getenv("OPENAI_BASE_URL", "http://localhost:8080/v1")
+    return base_url.replace("/v1", "").rstrip("/") + "/props"
+
+
+def fetch_server_props(base_url: str = None, timeout: float = 3.0) -> Dict:
+    props_url = _props_url_from_base_url(base_url)
+    try:
+        with urllib.request.urlopen(props_url, timeout=timeout) as response:
+            if response.status != 200:
+                return {}
+            payload = response.read().decode("utf-8")
+            return json.loads(payload)
+    except Exception:
+        return {}
 
 
 def xac_nhan_turboquant(base_url: str = None, strict: bool = False) -> bool:
     # Lấy thông tin URL từ file .env hoặc CLI runtime
     base_url = base_url or os.getenv("OPENAI_BASE_URL", "http://localhost:8080/v1")
-    
-    # Chuyển đổi sang endpoint kiểm tra thuộc tính của llama-server
-    props_url = base_url.replace("/v1", "").rstrip("/") + "/props"
-    
+    props = fetch_server_props(base_url=base_url, timeout=3.0)
+
     try:
-        # Gửi request kiểm tra tới server
-        with urllib.request.urlopen(props_url, timeout=3) as response:
-            if response.status == 200:
-                response.read()
-                
-                print("\n" + "═"*65)
-                print("🚀 [TURBOQUANT+ VALIDATION] KẾT NỐI SERVER THÀNH CÔNG!")
-                print(f" 🔹 API Endpoint  : {base_url}")
-                print(" 🔹 Wire protocol : OpenAI-compatible local /v1")
-                print(f" 🔹 Nhân xử lý    : Llama-Server C++ (Tích hợp tối ưu TurboQuant+)")
-                print(" 🔹 Trạng thái KV : Đang tự động nén trực tiếp trên VRAM GPU")
-                print(" ═" + "═"*63 + "\n")
-                return True
-            else:
-                print(f"⚠️ Cảnh báo: Kết nối tới server nhưng trả về mã lỗi: {response.status}")
+        if props:
+            print("\n" + "═"*65)
+            print("🚀 [TURBOQUANT+ VALIDATION] KẾT NỐI SERVER THÀNH CÔNG!")
+            print(f" 🔹 API Endpoint  : {base_url}")
+            print(" 🔹 Wire protocol : OpenAI-compatible local /v1")
+            print(f" 🔹 Nhân xử lý    : Llama-Server C++ (Tích hợp tối ưu TurboQuant+)")
+            print(" 🔹 Trạng thái KV : Đang tự động nén trực tiếp trên VRAM GPU")
+            print(" ═" + "═"*63 + "\n")
+            return True
+        print("⚠️ Cảnh báo: Kết nối tới server nhưng không đọc được /props")
     except Exception as exc:
         print("\n❌ [LỖI KẾT NỐI] KHÔNG THỂ TÌM THẤY SERVER CỦA TURBOQUANT!")
         print(f"   Vui lòng chắc chắn rằng bạn đã chạy lệnh khởi động `./build/bin/llama-server` tại cổng {base_url} trước.\n")
@@ -121,6 +132,72 @@ class PhaseTimer:
 
 def _is_local_base_url(base_url: str) -> bool:
     return bool(base_url) and ("localhost" in base_url or "127.0.0.1" in base_url)
+
+
+def _coerce_int(value):
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_slot_context_from_props(server_props: Dict) -> tuple[int | None, int | None]:
+    if not server_props:
+        return None, None
+    default_generation = server_props.get("default_generation_settings") or {}
+    slot_n_ctx = _coerce_int(default_generation.get("n_ctx"))
+    total_slots = _coerce_int(server_props.get("total_slots"))
+    return slot_n_ctx, total_slots
+
+
+def _should_probe_local_server(runtime_config: Dict) -> bool:
+    return bool(
+        runtime_config
+        and runtime_config.get("wire_protocol") == "openai-compatible-local"
+        and runtime_config.get("llm_base_url")
+    )
+
+
+def resolve_best_model_token_budget(
+    args,
+    runtime_config: Dict,
+    config_defaults: Dict,
+    server_props: Dict,
+) -> Dict:
+    configured_budget = config_defaults.get("best_model_max_token_size")
+    requested_budget = args.best_model_max_token_size or configured_budget
+    headroom = max(args.community_token_headroom or 0, 0)
+    slot_tokens, total_slots = _extract_slot_context_from_props(server_props)
+
+    resolved_budget = requested_budget
+    resolution = "config/default"
+
+    if slot_tokens:
+        safe_budget = max(1024, slot_tokens - headroom)
+        if requested_budget is None:
+            resolved_budget = safe_budget
+            resolution = "auto_from_server_props"
+        elif requested_budget > safe_budget:
+            print(
+                "[runtime] warning=best_model_max_token_size exceeds llama-server slot "
+                f"context ({requested_budget} > {safe_budget}); clamping to safe budget"
+            )
+            resolved_budget = safe_budget
+            resolution = "clamped_to_server_slot"
+        else:
+            resolution = "requested_within_server_slot"
+    elif args.best_model_max_token_size is not None:
+        resolution = "explicit_cli_without_server_props"
+
+    return {
+        "best_model_max_token_size": resolved_budget,
+        "community_token_headroom": headroom,
+        "server_slot_tokens": slot_tokens,
+        "server_total_slots": total_slots,
+        "budget_resolution": resolution,
+    }
 
 
 def apply_runtime_overrides(args, override_config: Dict) -> Dict:
@@ -640,6 +717,18 @@ def main():
         default=None,
         help='Timeout in seconds for the full entity extraction stage. Use 0 to disable the stage timeout.'
     )
+    parser.add_argument(
+        '--best_model_max_token_size',
+        type=int,
+        default=None,
+        help='Override logical max token budget used by community and timestamp packing'
+    )
+    parser.add_argument(
+        '--community_token_headroom',
+        type=int,
+        default=4096,
+        help='Reserved token headroom below llama-server slot context when auto-resolving build budget'
+    )
     
     args = parser.parse_args()
     
@@ -654,6 +743,26 @@ def main():
     if args.output_dir:
         override_config['working_dir'] = args.output_dir
     runtime_config = apply_runtime_overrides(args, override_config)
+    from tgrag.src.config.config_loader import ConfigLoader
+    config_loader = ConfigLoader(config_path=args.config)
+    config = config_loader.get_config(
+        "building", override_args=override_config if override_config else None
+    )
+
+    server_props = {}
+    if _should_probe_local_server(runtime_config):
+        server_props = fetch_server_props(runtime_config.get("llm_base_url"))
+        budget_info = resolve_best_model_token_budget(
+            args=args,
+            runtime_config=runtime_config,
+            config_defaults=config,
+            server_props=server_props,
+        )
+        if budget_info["best_model_max_token_size"] is not None:
+            override_config["best_model_max_token_size"] = budget_info[
+                "best_model_max_token_size"
+            ]
+        runtime_config.update(budget_info)
     
     # Create TemporalGraphRAG from config (simplified!)
     print("="*60)
@@ -672,6 +781,53 @@ def main():
             print(f"❌ Error: {e}")
             sys.exit(1)
     
+    build_manifest_path = None
+
+    def write_build_manifest(graph_rag, build_status: str, error_message: str = None) -> None:
+        nonlocal build_manifest_path
+        manifest = {
+            "build_timestamp": datetime.now().astimezone().isoformat(),
+            "build_status": build_status,
+            "working_dir": graph_rag.working_dir,
+            "provider": runtime_config.get("provider"),
+            "model": runtime_config.get("model"),
+            "llm_base_url": runtime_config.get("llm_base_url"),
+            "wire_protocol": runtime_config.get("wire_protocol"),
+            "best_model_max_async": getattr(graph_rag, "best_model_max_async", None),
+            "best_model_max_token_size": getattr(graph_rag, "best_model_max_token_size", None),
+            "community_token_headroom": runtime_config.get("community_token_headroom"),
+            "budget_resolution": runtime_config.get("budget_resolution"),
+            "server_slot_tokens": runtime_config.get("server_slot_tokens"),
+            "server_total_slots": runtime_config.get("server_total_slots"),
+            "embedding_provider": getattr(graph_rag, "embedding_provider", None),
+            "embedding_model": getattr(graph_rag, "embedding_model", None),
+            "embedding_dim": getattr(graph_rag, "embedding_dim", None),
+            "embedding_device": getattr(graph_rag, "embedding_device", None),
+            "embedding_batch_size": getattr(graph_rag, "embedding_batch_size", None),
+            "embedding_max_tokens": getattr(graph_rag, "embedding_max_tokens", None),
+            "embedding_prefix": getattr(graph_rag, "embedding_prefix", None),
+            "embedding_base_url": runtime_config.get("embedding_base_url"),
+            "corpus_path": args.corpus_path,
+            "num_docs": args.num_docs,
+            "chunk_size": graph_rag.chunk_token_size,
+            "chunk_overlap": graph_rag.chunk_overlap_token_size,
+            "local_llm_backend": runtime_config.get("local_llm_backend"),
+            "server_props": {
+                "default_generation_settings": server_props.get("default_generation_settings"),
+                "total_slots": server_props.get("total_slots"),
+                "model_alias": server_props.get("model_alias"),
+                "model_path": server_props.get("model_path"),
+            } if server_props else {},
+        }
+        if error_message:
+            manifest["error_message"] = error_message
+        build_manifest_path = Path(graph_rag.working_dir) / "build_manifest.json"
+        build_manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        print(f"[runtime] build_manifest={build_manifest_path}")
+
     try:
         graph_rag = create_temporal_graphrag_from_config(
             config_path=args.config,
@@ -687,6 +843,17 @@ def main():
         print(f"   Chunk overlap: {graph_rag.chunk_overlap_token_size} tokens")
         print(f"   Entity summarization: {'Disabled' if graph_rag.disable_entity_summarization else 'Enabled'}")
         print(f"   Community summary: {'Enabled' if graph_rag.enable_community_summary else 'Disabled'}")
+        if runtime_config.get("server_slot_tokens"):
+            print(
+                f"   Slot context: {runtime_config['server_slot_tokens']} tokens "
+                f"(slots={runtime_config.get('server_total_slots')})"
+            )
+        if runtime_config.get("best_model_max_token_size"):
+            print(
+                f"   Community pack budget: {runtime_config['best_model_max_token_size']} "
+                f"(resolution={runtime_config.get('budget_resolution')})"
+            )
+        write_build_manifest(graph_rag, build_status="initialized")
         timer.mark("initialize TemporalGraphRAG")
     except ValueError as e:
         print(f"❌ Error: {e}")
@@ -698,8 +865,6 @@ def main():
         sys.exit(1)
     
     # Load documents from corpus path (use config or override)
-    from tgrag.src.config.config_loader import ConfigLoader
-    config_loader = ConfigLoader(config_path=args.config)
     config = config_loader.get_config("building", override_args=override_config if override_config else None)
     corpus_path = Path(config.get('corpus_path', args.corpus_path))
     
@@ -751,8 +916,10 @@ def main():
         print("[timer] build graph started")
         graph_rag.insert(prepared_docs)
         print("\n✅ Graph building completed successfully!")
+        write_build_manifest(graph_rag, build_status="completed")
         timer.mark("insert documents and build graph")
     except Exception as e:
+        write_build_manifest(graph_rag, build_status="failed", error_message=str(e))
         print(f"\n❌ Error during graph building: {e}")
         import traceback
         traceback.print_exc()
@@ -790,6 +957,8 @@ def main():
     print(f"✅ Graph stored in: {Path(graph_rag.working_dir).absolute()}")
     print(f"✅ Working directory: {graph_rag.working_dir}")
     print(f"✅ Configuration: {args.config}")
+    if build_manifest_path:
+        print(f"✅ Build manifest: {build_manifest_path}")
     print(f"✅ Total elapsed: {format_seconds(timer.total())}")
     print("="*60)
 

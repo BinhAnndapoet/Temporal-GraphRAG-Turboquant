@@ -1410,7 +1410,7 @@ async def _pack_single_community_describe(
     ]
     edges_list_data = sorted(edges_list_data, key=lambda x: x[-1], reverse=True)
     edges_may_truncate_list_data = truncate_list_by_token_size(
-        edges_list_data, key=lambda x: x[3], max_token_size=max_token_size // 2
+        edges_list_data, key=lambda x: x[4], max_token_size=max_token_size // 2
     )
 
     truncated = len(nodes_list_data) > len(nodes_may_truncate_list_data) or len(
@@ -1440,10 +1440,10 @@ async def _pack_single_community_describe(
             n for n in nodes_list_data if n[1] in contain_nodes
         ]
         report_exclude_edges_list_data = [
-            e for e in edges_list_data if (e[1], e[2]) not in contain_edges
+            e for e in edges_list_data if (e[1], e[2], e[3]) not in contain_edges
         ]
         report_include_edges_list_data = [
-            e for e in edges_list_data if (e[1], e[2]) in contain_edges
+            e for e in edges_list_data if (e[1], e[2], e[3]) in contain_edges
         ]
         nodes_may_truncate_list_data = truncate_list_by_token_size(
             report_exclude_nodes_list_data + report_include_nodes_list_data,
@@ -1452,7 +1452,7 @@ async def _pack_single_community_describe(
         )
         edges_may_truncate_list_data = truncate_list_by_token_size(
             report_exclude_edges_list_data + report_include_edges_list_data,
-            key=lambda x: x[3],
+            key=lambda x: x[4],
             max_token_size=(max_token_size - report_size) // 2,
         )
     nodes_describe = list_of_list_to_csv([node_fields] + nodes_may_truncate_list_data)
@@ -1960,7 +1960,7 @@ async def generate_temporal_report(
                 )
                 prompt = community_report_prompt.format(input_text=describe)
                 
-                response = await use_llm_func(prompt, response_format={'type': 'json_object'})
+                response = await use_llm_func(prompt, **llm_extra_kwargs)
                 
                 if isinstance(response, (list, tuple)) and len(response) > 0:
                     response = response[0]
@@ -2014,8 +2014,14 @@ async def generate_temporal_report(
                 
                 if retry_count >= max_retries:
                     logger.error(f"Failed to generate community report after {max_retries} attempts")
+                    community_label = (
+                        community.get("name")
+                        or community.get("title")
+                        or community.get("timestamp")
+                        or "Unknown"
+                    )
                     return {
-                        "title": f"Error Report for {community.get('name', 'Unknown')}",
+                        "title": f"Error Report for {community_label}",
                         "summary": f"Failed to generate report: {str(e)}",
                         "rating": 0.0,
                         "rating_explanation": "Report generation failed",

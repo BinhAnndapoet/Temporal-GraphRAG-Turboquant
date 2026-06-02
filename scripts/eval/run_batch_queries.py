@@ -21,6 +21,13 @@ load_dotenv(PROJECT_ROOT / ".env")
 from tgrag import create_temporal_graphrag_from_config  # noqa: E402
 from tgrag.src.config.config_loader import ConfigLoader  # noqa: E402
 from tgrag.src.core.types import QueryParam  # noqa: E402
+from tgrag.src.utils.query_runtime import (  # noqa: E402
+    build_manifest_path,
+    infer_runtime_warnings,
+    is_local_base_url,
+    load_build_manifest,
+    resolve_query_embedding_runtime,
+)
 
 
 def log(message: str) -> None:
@@ -52,131 +59,88 @@ def load_done_questions(path: Path) -> set[str]:
 
 
 def resolve_embedding_overrides(args: argparse.Namespace) -> dict[str, Any]:
-    embedding_provider = args.embedding_provider
-    embedding_model = args.embedding_model
-    embedding_dim = args.embedding_dim
-    embedding_device = args.embedding_device
-    embedding_batch_size = args.embedding_batch_size
-    embedding_max_tokens = args.embedding_max_tokens
-    embedding_prefix = args.embedding_prefix
-    embedding_base_url = args.embedding_base_url
-
-    if embedding_provider == "huggingface":
-        embedding_base_url = None
-
     return {
-        "embedding_provider": embedding_provider,
-        "embedding_model": embedding_model,
-        "embedding_dim": embedding_dim,
-        "embedding_device": embedding_device,
-        "embedding_batch_size": embedding_batch_size,
-        "embedding_max_tokens": embedding_max_tokens,
-        "embedding_prefix": embedding_prefix,
-        "embedding_base_url": embedding_base_url,
+        "embedding_provider": args.embedding_provider,
+        "embedding_model": args.embedding_model,
+        "embedding_dim": args.embedding_dim,
+        "embedding_device": args.embedding_device,
+        "embedding_batch_size": args.embedding_batch_size,
+        "embedding_max_tokens": args.embedding_max_tokens,
+        "embedding_prefix": args.embedding_prefix,
+        "embedding_base_url": args.embedding_base_url,
     }
 
 
-def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, Any]:
+def apply_local_llm_runtime(
+    args, override_config: dict[str, Any], config_defaults: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    config_defaults = config_defaults or {}
+    working_dir = override_config.get("working_dir") or config_defaults.get("working_dir")
+    manifest = load_build_manifest(working_dir)
+
     if not args.local_llm_backend:
         provider = args.provider
         model = args.model or args.llm_model
         llm_base_url = args.base_url or args.llm_base_url
-        embedding_provider = args.embedding_provider
-        embedding_base_url = args.embedding_base_url
-        embedding_model = args.embedding_model
-        embedding_dim = args.embedding_dim
-
-        if provider:
-            override_config["provider"] = provider
-        if model:
-            override_config["model"] = model
-        if embedding_provider:
-            override_config["embedding_provider"] = embedding_provider
-        if embedding_model:
-            override_config["embedding_model"] = embedding_model
-        if embedding_dim:
-            override_config["embedding_dim"] = embedding_dim
-        if args.llm_max_async:
-            override_config["best_model_max_async"] = args.llm_max_async
-            override_config["cheap_model_max_async"] = args.llm_max_async
-        if args.llm_timeout:
-            override_config["llm_timeout"] = args.llm_timeout
-
-        if not any(
-            [
-                provider,
-                model,
-                llm_base_url,
-                embedding_provider,
-                embedding_base_url,
-                embedding_model,
-                embedding_dim,
-            ]
-        ):
-            return {}
+        default_embedding_provider = None
+        default_embedding_base_url = None
 
         wire_protocol = provider or "config"
         if provider == "ollama":
             wire_protocol = "ollama-native"
         elif provider == "openai" and llm_base_url:
-            is_local = "localhost" in llm_base_url or "127.0.0.1" in llm_base_url
+            is_local = is_local_base_url(llm_base_url)
             wire_protocol = (
                 "openai-compatible-local" if is_local else "openai-compatible"
             )
 
         api_key = None
         if provider == "openai" and llm_base_url:
-            is_local = "localhost" in llm_base_url or "127.0.0.1" in llm_base_url
+            is_local = is_local_base_url(llm_base_url)
             api_key = (
                 (os.getenv("OPENAI_API_KEY") or "sk-local")
                 if is_local
                 else os.getenv("OPENAI_API_KEY")
             )
-
-        return {
-            "local_llm_backend": "provider_override",
-            "provider": provider or "config",
-            "model": model or "config",
-            "llm_base_url": llm_base_url,
-            "embedding_provider": embedding_provider or "config",
-            "embedding_model": embedding_model or "config",
-            "embedding_dim": embedding_dim,
-            "embedding_base_url": embedding_base_url,
-            "wire_protocol": wire_protocol,
-            "api_key": api_key,
-        }
-
-    if args.local_llm_backend == "normal":
+    elif args.local_llm_backend == "normal":
         provider = "ollama"
         model = args.llm_model or args.model or "qwen3:14b"
         llm_base_url = args.llm_base_url or args.base_url or "http://localhost:11434"
+        default_embedding_provider = "ollama"
+        default_embedding_base_url = "http://localhost:11434"
         wire_protocol = "ollama-native"
         api_key = None
     else:
         provider = "openai"
         model = args.llm_model or args.model or "qwen3-14b-instruct"
         llm_base_url = args.llm_base_url or args.base_url or "http://localhost:8080/v1"
+        default_embedding_provider = None
+        default_embedding_base_url = None
         wire_protocol = "openai-compatible-local"
         api_key = os.getenv("OPENAI_API_KEY") or "sk-local"
 
-    embedding_runtime = resolve_embedding_overrides(args)
-    embedding_provider = embedding_runtime["embedding_provider"] or "ollama"
-    embedding_model = embedding_runtime["embedding_model"] or "nomic-embed-text"
-    embedding_dim = embedding_runtime["embedding_dim"] or 768
-    embedding_device = embedding_runtime["embedding_device"] or "cpu"
-    embedding_batch_size = embedding_runtime["embedding_batch_size"] or 16
-    embedding_max_tokens = embedding_runtime["embedding_max_tokens"] or 7500
+    embedding_runtime = resolve_query_embedding_runtime(
+        explicit=resolve_embedding_overrides(args),
+        config_defaults=config_defaults,
+        manifest=manifest,
+        default_provider=default_embedding_provider,
+        default_base_url=default_embedding_base_url,
+    )
+    embedding_provider = embedding_runtime["embedding_provider"]
+    embedding_model = embedding_runtime["embedding_model"]
+    embedding_dim = embedding_runtime["embedding_dim"]
+    embedding_device = embedding_runtime["embedding_device"]
+    embedding_batch_size = embedding_runtime["embedding_batch_size"]
+    embedding_max_tokens = embedding_runtime["embedding_max_tokens"]
     embedding_prefix = embedding_runtime["embedding_prefix"]
-    if embedding_provider == "huggingface":
-        embedding_base_url = None
-    else:
-        embedding_base_url = (
-            embedding_runtime["embedding_base_url"] or "http://localhost:11434"
-        )
+    embedding_base_url = embedding_runtime["embedding_base_url"]
+
+    if provider:
+        override_config["provider"] = provider
+    if model:
+        override_config["model"] = model
     override_config.update(
         {
-            "provider": provider,
-            "model": model,
             "embedding_provider": embedding_provider,
             "embedding_model": embedding_model,
             "embedding_dim": embedding_dim,
@@ -213,6 +177,15 @@ def apply_local_llm_runtime(args, override_config: dict[str, Any]) -> dict[str, 
         "embedding_base_url": embedding_base_url,
         "wire_protocol": wire_protocol,
         "api_key": api_key,
+        "build_manifest_path": build_manifest_path(working_dir),
+        "build_manifest_found": bool(manifest),
+        "warnings": infer_runtime_warnings(
+            working_dir=working_dir,
+            manifest=manifest,
+            config_defaults=config_defaults,
+            resolved_embedding=embedding_runtime,
+            local_llm_backend=args.local_llm_backend,
+        ),
     }
 
 
@@ -242,6 +215,7 @@ def runtime_public_fields(runtime_config: dict[str, Any]) -> dict[str, Any]:
         "embedding_dim": runtime_config.get("embedding_dim"),
         "embedding_base_url": runtime_config["embedding_base_url"],
         "wire_protocol": runtime_config["wire_protocol"],
+        "build_manifest_found": runtime_config.get("build_manifest_found"),
     }
 
 
@@ -466,7 +440,11 @@ def main() -> None:
     open_mode = "a" if args.resume else "w"
 
     override_config = {"working_dir": args.working_dir}
-    runtime_config = apply_local_llm_runtime(args, override_config)
+    config_loader = ConfigLoader(config_path=args.config)
+    config_defaults = config_loader.get_config(
+        "querying", override_args=override_config
+    )
+    runtime_config = apply_local_llm_runtime(args, override_config, config_defaults)
     apply_query_overrides(args, override_config)
     log(f"[setup] graph: {args.working_dir}")
     log(f"[setup] questions: {questions_path} ({len(questions)} selected)")
@@ -485,6 +463,16 @@ def main() -> None:
             f"embedding_dim={runtime_config.get('embedding_dim')} "
             f"embedding_base_url={runtime_config['embedding_base_url']}"
         )
+        if runtime_config.get("build_manifest_path"):
+            manifest_state = (
+                "found" if runtime_config.get("build_manifest_found") else "missing"
+            )
+            log(
+                f"[runtime] build_manifest={manifest_state} "
+                f"path={runtime_config['build_manifest_path']}"
+            )
+        for warning in runtime_config.get("warnings", []):
+            log(f"[runtime] warning={warning}")
     if (
         runtime_config.get("local_llm_backend") == "turboquant"
         and not args.skip_turboquant_healthcheck
@@ -515,7 +503,6 @@ def main() -> None:
     log(
         f"[timer] load graph/vector stores: {format_seconds(time.perf_counter() - setup_start)}"
     )
-    config_loader = ConfigLoader(config_path=args.config)
     raw_config = config_loader.get_config("querying", override_args=override_config)
     query_param = build_query_param(raw_config, args.mode)
     log(

@@ -18,8 +18,9 @@ Temporal-GraphRAG (TG-RAG) addresses the temporal blindness in conventional RAG 
 ## Installation
 
 ```bash
-git clone https://github.com/hanjiale/Temporal-GraphRAG.git
-cd Temporal-GraphRAG
+cd /home/guest/Projects/Research
+git clone https://github.com/BinhAnndapoet/Temporal-GraphRAG-Turboquant.git
+cd Temporal-GraphRAG-Turboquant
 
 # Create virtual environment
 python3.12 -m venv venv
@@ -28,6 +29,129 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 ```
+
+If you only want the upstream/cloud flow, the steps above are enough. If you want the local TurboQuant `llama-server` flow used by the runbooks in this fork, also clone the sibling repos below in the same parent directory.
+
+## Local TurboQuant Workspace
+
+Keep the three repos as siblings:
+
+```text
+/home/guest/Projects/Research/
+├── Temporal-GraphRAG-Turboquant
+├── llama-cpp-turboquant
+└── turboquant_plus
+```
+
+Clone the companion repos:
+
+```bash
+cd /home/guest/Projects/Research
+
+# Required for local TurboQuant `llama-server`
+git clone https://github.com/TheTom/llama-cpp-turboquant.git
+git -C llama-cpp-turboquant checkout feature/turboquant-kv-cache
+
+# Optional: docs, benchmarks, and REFRACT experiments
+git clone https://github.com/TheTom/turboquant_plus.git
+```
+
+- `llama-cpp-turboquant` is the runtime repo that provides `llama-server`.
+- `turboquant_plus` is an optional companion repo for TurboQuant profiles, benchmark notes, and REFRACT experiments. It is not required just to boot `llama-server`.
+- The local runbooks later in this README assume the `llama-cpp-turboquant` sibling path exists exactly as shown above.
+
+## Build `llama-server` with CMake
+
+From `llama-cpp-turboquant`, choose one backend configure command, then build:
+
+```bash
+cd /home/guest/Projects/Research/llama-cpp-turboquant
+
+# CPU only
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+# NVIDIA CUDA
+cmake -B build -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+
+# Apple Silicon Metal
+cmake -B build -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release
+
+# AMD ROCm/HIP
+cmake -B build -DGGML_HIP=ON -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --config Release --target llama-server -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+```
+
+Put a GGUF model under `llama-cpp-turboquant/models/`, then smoke-test the server:
+
+```bash
+./build/bin/llama-server \
+  -m /home/guest/Projects/Research/llama-cpp-turboquant/models/model.gguf \
+  --alias model-local \
+  -c 2048 \
+  --host 127.0.0.1 \
+  --port 8080
+
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/v1/models
+```
+
+If you use local `llama-server` via the OpenAI-compatible `/v1` API in this repo, set `OPENAI_API_KEY=dummy` (or any non-empty value), point `base_url` to `http://127.0.0.1:8080/v1`, and make sure the alias above matches the `--model` value you pass to `build_graph.py`, `query_graph.py`, or `demo.py`.
+
+If you want the same TurboQuant profile used by the detailed local runbooks later in this README, start the server like this:
+
+```bash
+./build/bin/llama-server \
+  -m /home/guest/Projects/Research/llama-cpp-turboquant/models/qwen2.5-7b-instruct-q8_0-00001-of-00003.gguf \
+  --alias qwen25-7b-q8-ctkq8-ctvturbo3-c32k-p2-np4096 \
+  --host 127.0.0.1 \
+  --port 8080 \
+  -ctk q8_0 \
+  -ctv turbo3 \
+  -fa on \
+  -ngl 99 \
+  -c 32768 \
+  --parallel 2 \
+  --n-predict 4096
+```
+
+For TurboQuant-specific verification later in this repo, also check:
+
+```bash
+curl http://127.0.0.1:8080/props
+curl http://127.0.0.1:8080/slots
+```
+
+## Local Env for These Runbooks
+
+Most local runbooks in this fork use a Conda env named `turboquant` rather than the lightweight `venv` shown above:
+
+```bash
+cd /home/guest/Projects/Research/Temporal-GraphRAG-Turboquant
+conda env create -f environment.turboquant.yml
+conda activate turboquant
+cp .env.example .env
+```
+
+Common local values in `.env`:
+
+```bash
+OPENAI_API_KEY=dummy
+OPENAI_BASE_URL=http://127.0.0.1:8080/v1
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+Add `GOOGLE_API_KEY` or `GEMINI_API_KEY` only if you want the Gemini path instead of local `llama-server`.
+
+## Local Docs Index
+
+For the longer workflow and tuning notes, use these in-repo docs:
+
+- `md/README_MD.md` for the broader local document index.
+- `md/CLI/start_server.md` for `llama-server` startup profiles and tuning.
+- `md/runbooks/demo_setup_and_db_graph_flow.md` for the canonical demo flow.
+- `scripts/run_demo_stack.sh` for the quickest tmux-based demo launcher.
+- `## Kiểm Tra Local TurboQuant LLM` later in this README for deeper verification, logging, and benchmark notes.
 
 ## Quick Start
 
